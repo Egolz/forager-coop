@@ -581,23 +581,28 @@ var _pa_safe = ScriptCall(ScriptWrap("GetLandsOwned"));
 array_push(_pa_lines, "ScriptCall(ScriptWrap(\"GetLandsOwned\")) = " + string(_pa_safe));
 
 // 4) The direct call. The docs list WaterCollision in "General Forager Behavior"
-//    next to HasSkill and LighthouseCalculate, which read as plain callable
-//    functions - not as things you reach through a wrapper at all. Everything so
-//    far says the wrapper path is a dead end for a first-party script:
+//    next to HasSkill and LighthouseCalculate, and the wrapper path is a dead end
+//    for a first-party script:
 //      * ScriptWrap resolves the name inside OUR mod ([wrapper, EgolzForagerCoop, ...])
-//      * ModFunctionGet("Forager", ...) = undefined, and ModFind/ModIsOnline say
-//        the game is not registered as a mod under any id we tried.
-//    So the only spelling left is the bare call. It may fail at COMPILE with
-//    "`WaterCollision` is not function or script" - that is a cheap answer and
-//    worth one cycle, because success means the whole water question is closed.
-//    Kept to a single line so a failure names this and nothing else.
+//      * ModFunctionGet("Forager", ...) = undefined, and ModFind/ModIsOnline say the
+//        game is not registered as a mod under any id we tried.
+//    Live 2026-10-20: the bare call *does* compile and run -
+//      WaterCollision(716,630) = 0   and   HasSkill(0) = 0
+//    - so the API exposes it directly. What is still unproven is the *sense* of the
+//    answer: 0 at a spot needs to be checked against a spot that is definitely water,
+//    which is what the two extra points below are for. Sum the probe over the four
+//    directions so one of them is likely to land on a shoreline or a pool.
 var _pa_dir = WaterCollision(_pa_px, _pa_py);
 array_push(_pa_lines, "WaterCollision(" + string(_pa_px) + "," + string(_pa_py) + ") = " + string(_pa_dir));
 
-// 4b) The control for that: HasSkill sits in the same docs list. A skill index of
-//     0 is a real query, and if both of these compile while only one answers, it
-//     separates "the bare-call syntax is wrong" from "the function itself is not
-//     there".
+var _pa_off = 96;
+array_push(_pa_lines, "left  " + string(WaterCollision(_pa_px - _pa_off, _pa_py)));
+array_push(_pa_lines, "right " + string(WaterCollision(_pa_px + _pa_off, _pa_py)));
+array_push(_pa_lines, "up    " + string(WaterCollision(_pa_px, _pa_py - _pa_off)));
+array_push(_pa_lines, "down  " + string(WaterCollision(_pa_px, _pa_py + _pa_off)));
+array_push(_pa_lines, "far +512 right " + string(WaterCollision(_pa_px + 512, _pa_py)));
+
+// 4b) The control: HasSkill sits in the same docs list.
 var _pa_skill = HasSkill(0);
 array_push(_pa_lines, "HasSkill(0) = " + string(_pa_skill));
 
@@ -735,6 +740,18 @@ switch (_cmd) {
                 CoopSendIntentRejected(_iid, "too far from your player (" + string(round(_dist)) + " px)");
                 break;
             }
+        }
+        // Is the spot buildable at all? Until now a client could ask for anything
+        // in range, and the mock's furnace landed on open water - a player could
+        // not have built there. WaterCollision(x, y) is the game's own answer and
+        // this build lets a mod call it directly (F11, live 2026-10-20:
+        // `WaterCollision(716,630) = 0` compiled and ran, so the wrapper path was
+        // never needed). Non-zero means water, so the intent is refused.
+        if (WaterCollision(_ix, _iy) != 0) {
+            CoopSendIntentRejected(_iid, "that spot is on water");
+            Trace("Co-op: refused intent #" + string(_iid) + " - water at "
+                  + string(_ix) + "," + string(_iy) + ".");
+            break;
         }
 
         var _placed = CoopCreateStructure(_sid, _ix, _iy, CoopStructDepth(_iy));

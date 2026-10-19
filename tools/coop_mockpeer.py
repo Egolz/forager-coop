@@ -253,6 +253,7 @@ class Peer:
         self.last_ping = 0.0
         self.room = 0               # room learned from the game's POS packets
         self.player = None          # last position the game reported
+        self.px, self.py = 620, 620 # where our own puppet currently is
         self.structs: list[tuple[int, str]] = []
         self.place_wanted = place   # None = auto, "" = do not ask
         self.placed = False
@@ -388,10 +389,15 @@ class Peer:
                 self.send(ping(self.nonce))
                 log(f"-> PING nonce={self.nonce}")
                 self.last_ping = now
-            # walk the mock puppet around a small square, in the game's room
+            # Walk our puppet in a small square just left of the game's player,
+            # so the marker is on screen and anything we ask for lands near both.
+            # Falls back to a fixed spot until the game reports its position.
+            bx, by = self.player or (620, 620)
+            bx -= 96
             t = int(now) % 40
-            x = 620 + (t if t < 10 else 10 if t < 20 else (30 - t) if t < 30 else 0)
-            y = 620 + (0 if t < 10 else (t - 10) if t < 20 else 10 if t < 30 else (40 - t))
+            x = bx + (t if t < 10 else 10 if t < 20 else (30 - t) if t < 30 else 0)
+            y = by + (0 if t < 10 else (t - 10) if t < 20 else 10 if t < 30 else (40 - t))
+            self.px, self.py = x, y
             self.send(pos(x, y, angle=0, facing=1, sprite=-1, image=0, room=self.room))
         # ask the host to build something, once
         if self.place_due and not self.placed and now >= self.place_due:
@@ -400,12 +406,15 @@ class Peer:
             if name is None:
                 log("!! the host sent no structure table; cannot request a build")
                 return
-            px, py = self.player or (620, 620)
+            # put it a little to the right of the game's player - near enough for
+            # the host's range check, far enough to be an obvious new object
+            px, py = self.player or self.px, self.py
+            tx, ty = (px + 128, py)
             room = self.room if self.room else 8
             self.last_intent = (intent_id := random.randint(1, 0xFFFF))
-            log(f"-> INTENT_PLACE '{name}' at {px + 64},{py} (room {room}, "
-                f"#{intent_id})")
-            self.send(intent_place(intent_id, room, px + 64, py, name))
+            log(f"-> INTENT_PLACE '{name}' at {tx},{ty} (room {room}, "
+                f"#{intent_id}); our puppet is at {self.px},{self.py}")
+            self.send(intent_place(intent_id, room, tx, ty, name))
 
 
 def run_selftest() -> int:

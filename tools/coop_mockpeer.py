@@ -279,16 +279,19 @@ class Peer:
     # -- receiving ----------------------------------------------------------
     def recv(self):
         try:
-            return self.sock.recv(4096)
+            got = self.sock.recv(4096)
         except socket.timeout:
-            return b""
+            return b""              # nothing yet - not an error
         except OSError:
-            return None  # peer closed
+            return None             # peer closed hard
+        if got == b"":
+            return None             # clean EOF: the peer is *gone*, not idle
+        return got
 
     def pump(self) -> None:
         chunk = self.recv()
         if chunk is None:
-            log("connection closed")
+            log("connection closed by peer")
             raise SystemExit(0)
         if chunk:
             self.buf += chunk
@@ -528,34 +531,78 @@ def run_selftest() -> int:
 
 
 def run_client(host: str, port: int, place: str | None, wait: float = 0.0,
-               run_for: float = 0.0) -> None:
-    log(f"connecting to game host {host}:{port}"
-        + (f" (retrying for up to {wait:.0f}s - start hosting whenever)" if wait > 0 else ""))
-    deadline = time.time() + wait
+               run_for: float = 0.0) -> int:
+    """Talk to the game's host, and dial again whenever the game goes away.
+
+    The owner's game comes and goes - a restart, a crash, a recompile - and a peer
+    that quietly hangs on a dead socket wastes the whole test. That happened once:
+    the mock sat on a closed connection while a fresh host listened on the port,
+    so a clean EOF now counts as "peer gone" (see recv) and this loop redials
+    while its time budget lasts.
+    """
+    start = time.time()
+    deadline = start + wait if wait > 0 else None
+    stop_at = start + run_for if run_for > 0 else None
+    session_no = 0
     while True:
-        try:
-            s = socket.create_connection((host, port), timeout=5)
-            break
-        except OSError as exc:
-            if time.time() >= deadline:
-                log(f"!! could not connect: {exc}")
-                raise SystemExit(1)
-            time.sleep(1.0)
-    log("connected")
-    peer = Peer(s, is_host=False, place=place)
-    while not peer.ready:
-        peer.pump()
-    log("sending HELLO")
-    peer.send(hello())
-    log("-> HELLO")
-    stop_at = time.time() + run_for if run_for > 0 else None
-    while True:
-        peer.pump()
-        peer.tick()
-        time.sleep(0.1)
         if stop_at is not None and time.time() >= stop_at:
             log(f"(--for {run_for:.0f}s reached; done)")
-            return
+            return 0
+        session_no += 1
+        if session_no == 1:
+            log(f"connecting to game host {host}:{port}"
+                + (f" (retrying for up to {wait:.0f}s - start hosting whenever)"
+                   if wait > 0 else ""))
+        else:
+            log(f"reconnecting to {host}:{port} (session {session_no})")
+        while True:
+            try:
+                s = socket.create_connection((host, port), timeout=5)
+                break
+            except OSError as exc:
+                if deadline is None or time.time() >= deadline:
+                    log(f"!! could not connect: {exc}")
+                    return 1
+                time.sleep(1.0)
+        log("connected")
+        code = _session(s, place, stop_at, run_for)
+        if code is None:                 # time budget ran out inside the session
+            return 0
+        if code != 0:                    # a protocol mistake - do not loop on it
+            return 1
+        log("session ended; the host may have restarted")
+        if deadline is None or time.time() >= deadline:
+            log("no time budget left to reconnect")
+            return 1
+        time.sleep(1.0)
+
+
+def _session(s: socket.socket, place: str | None, stop_at: float | None,
+             run_for: float) -> int | None:
+    """One connection to the host. None = the time budget ran out, else the exit code."""
+    peer = Peer(s, is_host=False, place=place)
+
+    def timeup() -> bool:
+        return stop_at is not None and time.time() >= stop_at
+
+    try:
+        while not peer.ready:
+            peer.pump()
+            if timeup():
+                log(f"(--for {run_for:.0f}s reached; done)")
+                return None
+        log("sending HELLO")
+        peer.send(hello())
+        log("-> HELLO")
+        while True:
+            peer.pump()
+            peer.tick()
+            time.sleep(0.1)
+            if timeup():
+                log(f"(--for {run_for:.0f}s reached; done)")
+                return None
+    except SystemExit as exc:
+        return 0 if exc.code is None else int(exc.code)
 
 
 def run_probe(host: str, port: int, settle: float) -> None:
@@ -633,7 +680,7 @@ def main() -> int:
         if args.mode == "selftest":
             return run_selftest()
         if args.mode == "client":
-            run_client(args.host, args.port, place, args.wait, args.run_for)
+            return run_client(args.host, args.port, place, args.wait, args.run_for)
         elif args.mode == "probe":
             run_probe(args.host, args.port, settle=4.0)
         else:

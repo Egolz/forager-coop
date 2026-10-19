@@ -555,6 +555,23 @@ if (_pa_fn == undefined) {
                + ", value " + string(_pa_fn));
 }
 
+// 2b) Which mod ids does the API actually know? The docs say a ScriptWrapper is
+//     [mod, methodName] and that index 0 is "Forager" if 1st party - but our own
+//     wrap came back as [wrapper, "EgolzForagerCoop", "WaterCollision"], i.e. the
+//     name resolved inside *our* mod, and "Forager" returned undefined. So the
+//     real first-party id is something else and has to be discovered, not guessed.
+//     ModFind/ModIsOnline answer whether an id exists at all.
+var _pa_ids = ["Forager", "ForagerModdingAPI", "ModdingSample", "forager", "Forager Coop"];
+for (var _pa_ii = 0; _pa_ii < array_length(_pa_ids); _pa_ii++) {
+    var _pa_id = array_get(_pa_ids, _pa_ii);
+    var _pa_found = -1;
+    var _pa_online = -1;
+    _pa_found  = ModFind(_pa_id);
+    _pa_online = ModIsOnline(_pa_id);
+    array_push(_pa_lines, "id '" + _pa_id + "' ModFind=" + string(_pa_found)
+               + " ModIsOnline=" + string(_pa_online));
+}
+
 // 3) Calling a no-argument first-party script through the documented path is
 //    safe. GetLandsOwned takes no arguments (docs: "Returns how many lands the
 //    player has") and is in this build, so it is the control: if this line answers
@@ -562,6 +579,14 @@ if (_pa_fn == undefined) {
 //    only thing WaterCollision needs that we cannot supply is its x/y.
 var _pa_safe = ScriptCall(ScriptWrap("GetLandsOwned"));
 array_push(_pa_lines, "ScriptCall(ScriptWrap(\"GetLandsOwned\")) = " + string(_pa_safe));
+
+// 4) Last resort, deliberately NOT enabled: a bare `WaterCollision(x, y)` is
+//    expected to fail at COMPILE with "`WaterCollision` is not function or
+//    script", so it stays commented and the mod keeps building. InsideMod /
+//    ModCall look like the argument-passing path, but their signatures are not
+//    documented and a wrong guess costs a whole COMPILE cycle - one question at a
+//    time. Enable this line alone, in a dedicated run, once 1-4 are read.
+// var _pa_bare = WaterCollision(_pa_px, _pa_py);
 
 array_push(_pa_lines, "=== api probe end ===");
 

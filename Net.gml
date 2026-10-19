@@ -140,11 +140,19 @@ buffer_write(_b, buffer_u8, objPlayer.room);
 CoopSend(_b);
 
 // ---------------------------------------------------------------------------
-// M2: structures
+// Wire-key decision (F10 probe, 2026-10-20).
 //
-// A structure is identified on the wire by its **name** (e.g. "forge"), not by
-// an object index: names are stable between builds and readable in a log.
+// A structure is identified on the wire by its **name** (e.g. "forge"). The live
+// database shows why that is fragile: the names are localized display strings
+// ("печь", "швейная\nмастерская"), so the same structure is a different string in
+// another language, and rows #68..#80 hold an empty string. The fix is to key on
+// the Structure enum index and keep the name for logs; that is a wire change and
+// is scheduled next, not done here.
 //
+// What the probe did settle is that a name-keyed request *works*: asking for
+// "печь" created a real objFurnace at the right place and the right depth
+// (800,672 depth -672), and the game's own OnStructureSpawn() re-announced it.
+// ---------------------------------------------------------------------------
 // Note on the macros below: GML here is happy with the same `var` name in two
 // *different* blocks (PencilPal relies on that everywhere) but not twice inside
 // one block, so each macro uses its own prefix and none of them is expanded

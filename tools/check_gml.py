@@ -58,6 +58,25 @@ KEYWORDS = {"if", "for", "while", "switch", "with", "return", "repeat", "do", "u
             "catch", "case", "and", "or", "not", "mod", "div", "var", "function", "new",
             "delete", "try", "else"}
 
+# Names that sit in data.win's bytes but that a mod still cannot call: the loader
+# resolves a mod's calls against its own function table, not against the build, so
+# "the string is in data.win" is necessary but not sufficient. This list is what
+# that costs when it is missed.
+#
+# Live evidence (2026-10-20): a COMPILE of Net.gml failed with
+#     Mod failed to unit! Forager Coop/Net.gml[L453,c1] `ini_open` is not function or script
+# while ini_open, ini_write_string, ini_write_real and ini_close all appear in
+# data.win - the game writes its own secretSettings.ini with them. So the mod's
+# dump cannot go to a file this way.
+#
+# Proven blocked: ini_open. Included by inference (same family, same call site
+# pattern, not individually tested): the rest.
+LOADER_BLOCKED = {
+    "ini_open", "ini_close", "ini_write_string", "ini_write_real",
+    "ini_read_string", "ini_read_real", "ini_key_exists", "ini_section_exists",
+    "ini_key_delete", "ini_section_delete",
+}
+
 NAMES = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 DEFINE = re.compile(r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)"
                     r"(?:\s*\(([^)]*)\))?", re.M)
@@ -201,6 +220,11 @@ def check_calls(name: str, line: int, body: str, where: str, arities: dict[str, 
             continue
         if fn[0].isupper():
             continue                    # ObjFoo.bar() style, not a builtin
+        if fn in LOADER_BLOCKED:
+            problems.append(f"{where}:{ln}: {fn}() is in data.win but NOT in the mod "
+                            f"loader's function table - COMPILE fails with "
+                            f"\"`{fn}` is not function or script\"")
+            continue
         if symbols is not None:
             if fn.encode() not in symbols:
                 missing.add(fn)

@@ -8,7 +8,8 @@
 // This mod compiles with the game's own loader (main menu -> modding -> enable
 // the mod -> COMPILE). No external tool is required - proven by M0.
 //
-// Controls:  F5 = host   F6 = join   F7 = disconnect   F8 = status   F9 = dump structures
+// Controls:  F5 = host   F6 = join   F7 = disconnect   F8 = status
+//            F9 = dump structures   F10 = probe the world (see Net.gml)
 // Console for Trace output: the `t` key.
 // ============================================================================
 
@@ -24,11 +25,13 @@ enum CoopCmd {
     INTENT_PLACE     = 8,   // client -> host: please place this structure
     MUTATION_PLACE   = 9,   // host -> client: this structure exists now, at sequence N
     INTENT_REJECTED  = 10,  // host -> client: that intent is refused, and here is why
-    STRUCTURE_TABLE  = 11   // host -> client: the structure id/name list
+    STRUCTURE_TABLE  = 11,  // host -> client: the structure id/name list
+    DEBUG_LINE       = 12   // either way: one line of the sender's console
 }
 
-global.coopVersion  = "0.0.3-m2a";
-global.coopProtocol = 2;   // 1 = presence only (M1); 2 adds the world-sync packets
+global.coopVersion  = "0.0.4-m2b";
+global.coopProtocol = 3;   // 1 = presence only (M1); 2 adds the world-sync packets;
+                           // 3 adds DEBUG_LINE, the remote console
 global.coopPort     = 6511;
 global.coopPlaceRange = 448;   // see Net.gml: how far a client may place from itself
 

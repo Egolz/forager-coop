@@ -56,8 +56,18 @@ Both players need a copy of the game, this mod installed and enabled.
 | **F6** | Join — asks for the host's IP address |
 | **F7** | Disconnect / stop hosting |
 | **F8** | Print connection status (peer, ping, peer position, world sequence) |
-| **F9** | Print the first 24 entries of the structure database (id, name, object) |
+| **F9** | Print the whole structure database (id, name, object, is it a structure) |
+| **F10** | Probe the world: the game's own structure instances next to ours (see below) |
 | **t** | Toggle the console |
+
+**F10, the probe**, is read-only. It prints the room's player, the game's own parent object
+for buildings (`parStructure`) with every instance of it, then every instance of the object
+our structure table names - with `depth`, `image_index` and `visible`, the fields that decide
+whether a player would see it. The long part (all 64 table entries) is not printed: the mod
+forwards it to the connected peer over the protocol and `tools/coop_mockpeer.py` writes it to
+`%TEMP%\coop_debug.txt`. It has to go over the wire because a mod in this game **cannot write
+a file**: `ini_open` is not in the loader's function table, and `file_text_*`, `buffer_save`
+and `show_debug_message` are not in the build at all.
 
 Host first (F5), then the other player joins (F6 → the host's IP). On one network that is
 the host's LAN address; over the internet it needs the host's public address **and** a port

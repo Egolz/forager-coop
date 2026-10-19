@@ -64,12 +64,22 @@ with a confirmed mutation. See the model in the hub's `games/forager/DESIGN.md`.
 | 9 | `MUTATION_PLACE` | host → client | `u32 seq`, `u32 intentId`, `u8 room`, `s32 x`, `s32 y`, `s32 depth`, `string structureName` |
 | 10 | `INTENT_REJECTED` | host → client | `u32 intentId`, `string reason` |
 | 11 | `STRUCTURE_TABLE` | host → client | `u16 count`, `{ u16 id, string name } × count` |
+| 12 | `DEBUG_LINE` | either way | `string text` |
 
 Notes:
 
-- A structure travels as its **name** (`"forge"`), never as an object index: names are
-  build-independent and readable in a log. The receiver resolves the name against its own
-  structure database (`StructureGet(id, StructureData.Name)` / `StructureData.Object`).
+- A structure travels as its **name** (`"forge"`). That is what the first slice shipped, and
+  live it turned out to be wrong: the names in this game's structure database are
+  **localized display strings** (`"печь"`, `"швейная\nмастерская"`), not stable ids, so the
+  same structure is a different string in a different language. The key has to move to the
+  structure **index** or its object index (what PencilPal syncs); the name stays for logs
+  only. Fixing it is the next change to this slice - see `games/forager/NOTES.md`.
+- `DEBUG_LINE` carries one line of the sender's console. It exists because a mod in this
+  game **cannot write a file**: `ini_open` is not in the loader's function table (a live
+  COMPILE fails with "`ini_open` is not function or script"), and `file_text_*`,
+  `buffer_save` and `show_debug_message` are not in the build at all. So the mod forwards a
+  long dump (F10) to the peer, and `tools/coop_mockpeer.py` writes it to
+  `%TEMP%\coop_debug.txt`. It is diagnostics, not world state.
 - `intentId` is the client's own counter. It lets a client match a confirmation to the
   structure it placed optimistically, and a refusal to the thing it has to roll back.
 - `seq` is monotonically increasing per host session. A client applies a mutation only if
@@ -88,7 +98,8 @@ Notes:
 Notes:
 
 - **Version check.** The host refuses a peer whose `protocol` differs (it replies `REJECT`
-  and drops the socket). Protocol `2`, mod version `0.0.3-m2a` at the time of writing.
+  and drops the socket). Protocol `3`, mod version `0.0.4-m2b` at the time of writing.
+  (`3` adds `DEBUG_LINE`; `2` added the world-sync packets; `1` was presence only.)
 - **Ping/pong.** One ping in flight at a time, every 90 steps (≈1.5 s at 60 fps). A ping
   that is not answered within 5 s marks the peer as gone. `PONG` echoes the nonce back.
 - **POS** is the one packet that is not host-authoritative: each player sends their own

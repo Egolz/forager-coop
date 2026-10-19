@@ -28,6 +28,7 @@ Mod packets (little-endian; GameMaker buffer_string = UTF-8 + NUL):
     9  MUTATION_PLACE   u32 seq, u32 intentId, u8 room, s32 x, s32 y, s32 depth, string name
     10 INTENT_REJECTED  u32 intentId, string reason
     11 STRUCTURE_TABLE  u16 count, { u16 id, string name } * count
+    12 DEBUG_LINE       string text
 
 Usage (from the repo root, with the game running and the mod loaded):
 
@@ -40,6 +41,10 @@ In `client` mode the mock asks the host to place a structure once it has the
 structure table and knows where the player is. By default it picks the first
 name in `PREFERRED_STRUCTURES` that the host knows about; `--place NAME`
 overrides that and `--no-place` turns the request off.
+
+DEBUG_LINE carries one line of the peer's console and lands in
+%TEMP%\\coop_debug.txt. The game's mods cannot write files themselves, so this
+is how a long dump (F10 = probe the world) gets out of the game as readable text.
 """
 
 from __future__ import annotations
@@ -54,8 +59,8 @@ import sys
 import tempfile
 import time
 
-PROTOCOL = 2
-VERSION = "mockpeer-2"
+PROTOCOL = 3
+VERSION = "mockpeer-3"
 
 # GameMaker handshake / framing
 HANDSHAKE_SV0 = b"GM:Studio-Connect\x00"
@@ -68,12 +73,14 @@ HANDSHAKE_PRE = 0xDEADC0DE
 # mod packets
 HELLO, WELCOME, REJECT, PING, PONG, POS, BYE = 1, 2, 3, 4, 5, 6, 7
 INTENT_PLACE, MUTATION_PLACE, INTENT_REJECTED, STRUCTURE_TABLE = 8, 9, 10, 11
+DEBUG_LINE = 12
 
 NAMES = {
     HELLO: "HELLO", WELCOME: "WELCOME", REJECT: "REJECT",
     PING: "PING", PONG: "PONG", POS: "POS", BYE: "BYE",
     INTENT_PLACE: "INTENT_PLACE", MUTATION_PLACE: "MUTATION_PLACE",
     INTENT_REJECTED: "INTENT_REJECTED", STRUCTURE_TABLE: "STRUCTURE_TABLE",
+    DEBUG_LINE: "DEBUG_LINE",
 }
 
 # structures to try to build if we are not told which one (first match wins)
@@ -82,6 +89,33 @@ PREFERRED_STRUCTURES = ["forge", "furnace", "anvil", "torch", "bridge", "chest"]
 
 def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+# --- the mod's forwarded console -------------------------------------------
+# A mod compiled by this game's loader cannot write a file (see DEBUG_LINE in
+# docs/PROTOCOL.md), so the mod sends its long dumps over the wire and we keep
+# them here. One file per connection, truncated on each new session: it always
+# holds the dumps of the session being tested, and never a stale mix.
+
+DEBUG_FILE = os.path.join(tempfile.gettempdir(), "coop_debug.txt")
+_debug_handle = None
+
+
+def debug_note(text: str) -> None:
+    global _debug_handle
+    log(f"## {text}")
+    if _debug_handle is None:
+        _debug_handle = open(DEBUG_FILE, "w", encoding="utf-8")
+        log(f"   (debug lines are written to {DEBUG_FILE})")
+    _debug_handle.write(text + "\n")
+    _debug_handle.flush()
+
+
+def reset_debug_file() -> None:
+    global _debug_handle
+    if _debug_handle is not None:
+        _debug_handle.close()
+        _debug_handle = None
 
 
 # --- packet building -------------------------------------------------------
@@ -123,6 +157,11 @@ def structure_table(entries: list[tuple[int, str]]) -> bytes:
     for sid, name in entries:
         out += struct.pack("<H", sid) + p_str(name)
     return out
+
+
+def debug_line(text: str) -> bytes:
+    """One line of the sender's console (packet 12). See DEBUG_LINE above."""
+    return bytes([DEBUG_LINE]) + p_str(text)
 
 
 def bye(reason: str) -> bytes:
@@ -217,6 +256,12 @@ def parse_one(buf: bytes):
             name, i = s
             entries.append((sid, name))
         return {"cmd": cmd, "name": NAMES[cmd], "entries": entries}, i
+    if cmd == DEBUG_LINE:
+        s = _read_str(buf, 1)
+        if s is None:
+            return None, 0
+        text, end = s
+        return {"cmd": cmd, "name": NAMES[cmd], "text": text}, end
     raise ValueError(f"unknown mod-packet id {cmd} (raw: {buf[:32].hex()})")
 
 
@@ -240,6 +285,8 @@ def describe(pkt: dict) -> str:
         return f"INTENT_REJECTED #{pkt['intentId']}: {pkt['reason']!r}"
     if name == "STRUCTURE_TABLE":
         return f"STRUCTURE_TABLE {len(pkt['entries'])} entries"
+    if name == "DEBUG_LINE":
+        return f"DEBUG {pkt['text']}"
     return f"{name} reason={pkt.get('reason')!r}"
 
 
@@ -385,6 +432,10 @@ class Peer:
             # game running, which is how a bug in that path is caught.
             self.send(structure_table([(0, "land"), (1, "forge")]))
             log("-> STRUCTURE_TABLE 2 entries")
+            # One DEBUG_LINE so the offline test covers packet 12 too: in the
+            # real thing this is how the game's long dumps reach us.
+            self.send(debug_line("e2e: a debug line from the mock host"))
+            log("-> DEBUG_LINE")
             self.handshaken = True
         elif name == "WELCOME" and not self.is_host:
             if pkt["protocol"] != PROTOCOL:
@@ -413,6 +464,10 @@ class Peer:
                 self.pos_logged = self.player
                 log(f"   pos {pkt['x']},{pkt['y']} room {pkt['room']}"
                     + f" facing {pkt['facing']}")
+        elif name == "DEBUG_LINE":
+            # The mod's own console, forwarded: this game's mods cannot write
+            # files, so a long dump arrives here and we write it down.
+            debug_note(pkt["text"])
         elif name in ("REJECT", "BYE"):
             log("peer ended the session")
             raise SystemExit(0)
@@ -510,11 +565,13 @@ def run_selftest() -> int:
            + struct.pack("<H", 0) + p_str("land")
            + struct.pack("<H", 1) + p_str("forge"))
     rej = bytes([INTENT_REJECTED]) + struct.pack("<I", 9) + p_str("too far")
+    dbg = debug_line("probe: table #0 obj objForge isStruct=1")
     for payload, name, checks in [
         (mut, "MUTATION_PLACE", {"seq": 12, "intentId": 9, "x": 640, "y": 704,
                                  "depth": -10, "structure": "forge"}),
         (tbl, "STRUCTURE_TABLE", {"entries": [(0, "land"), (1, "forge")]}),
         (rej, "INTENT_REJECTED", {"intentId": 9, "reason": "too far"}),
+        (dbg, "DEBUG_LINE", {"text": "probe: table #0 obj objForge isStruct=1"}),
     ]:
         try:
             pkt, used = parse_one(payload)
@@ -539,7 +596,7 @@ def run_selftest() -> int:
         for f in failures:
             log(f"FAIL {f}")
         return 1
-    log(f"selftest: {len(cases) + 3} packets encode/parse correctly")
+    log(f"selftest: {len(cases) + 4} packets encode/parse correctly")
     return 0
 
 
@@ -578,6 +635,7 @@ def run_client(host: str, port: int, place: str | None, wait: float = 0.0,
                     return 1
                 time.sleep(1.0)
         log("connected")
+        reset_debug_file()
         code = _session(s, place, stop_at, run_for)
         if code is None:                 # time budget ran out inside the session
             return 0
@@ -666,6 +724,7 @@ def run_server(port: int) -> None:
     log(f"listening on 0.0.0.0:{port} - now press F6 in the game and enter 127.0.0.1")
     conn, addr = srv.accept()
     log(f"game connected from {addr[0]}:{addr[1]}")
+    reset_debug_file()
     peer = Peer(conn, is_host=True)
     while True:
         peer.pump()

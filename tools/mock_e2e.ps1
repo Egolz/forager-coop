@@ -35,9 +35,10 @@ Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 $text = Get-Content $cliLog -Raw
 $want = @(
     "GM handshake complete (client side)",
-    "<- WELCOME protocol=2",
+    "<- WELCOME protocol=3",
     "<- PONG",
     "<- STRUCTURE_TABLE",
+    "<- DEBUG e2e: a debug line from the mock host",
     "-> INTENT_PLACE"
 )
 $failed = @()

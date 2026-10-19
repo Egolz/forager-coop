@@ -12,6 +12,23 @@ if (_sock < 0) {
 network_send_packet(_sock, _buf, buffer_tell(_buf));
 buffer_delete(_buf);
 
+#define CoopSendDebugLine(_text)
+// Sends one line of our console to the peer, which writes it down.
+//
+// Why over the wire: a mod here cannot write a file. `ini_open` is not in this
+// loader's function table ("`ini_open` is not function or script", live COMPILE
+// error 2026-10-20), and `file_text_*`, `buffer_save` and `show_debug_message`
+// are absent from the build entirely. A long dump therefore leaves the game
+// through the socket - the peer is ours, and it has a disk.
+//
+// console-only fallback: if nobody is connected, the caller still Traces it.
+if (global.coopSocket >= 0) {
+    var _dbl_b = buffer_create(256, buffer_grow, 1);
+    buffer_write(_dbl_b, buffer_u8, CoopCmd.DEBUG_LINE);
+    buffer_write(_dbl_b, buffer_string, _text);
+    CoopSend(_dbl_b);
+}
+
 #define CoopResetPeer()
 // Drops the peer, keeping the listening server (host) if there is one.
 global.coopConnected   = false;
@@ -341,12 +358,10 @@ Trace("---");
 
 #define CoopProbeWorld()
 // F10. Read-only. Dumps what the game thinks a structure is next to what our
-// table thinks, then writes it to coop_probe.ini in the game's own data folder
-// (next to error.log) - a console screenshot cannot be trusted for a table this
-// size, and the OCR of the first one already garbled every digit.
-//
-// The console gets the short half: the world, and the room's player. The file
-// gets that plus the whole 64-entry id -> object table.
+// table thinks. The console gets the short half; the whole 64-entry
+// id -> object table goes over the wire, to the peer, which writes it to
+// %TEMP%\coop_debug.txt - this game's mods cannot write files themselves (see
+// CoopSendDebugLine), and a screenshot of a table this size OCRs into nonsense.
 //
 // The parStructure half is the ground truth - the game's own parent object for
 // every building, whatever our table believes. The other half walks our own
@@ -423,8 +438,8 @@ for (var _pw_i = 0; _pw_i < _pw_kind; _pw_i++) {
 }
 array_push(_pw_lines, "our table matched " + string(_pw_hits) + " kinds in this room");
 
-// The whole id -> object table, file only: 64 console lines would bury the part
-// that matters, and the file is the copy we can actually read.
+// The whole id -> object table: wire only. 64 console lines would bury the part
+// that matters, and the peer writes what we send to a file we can read.
 var _pw_tbl = [];
 for (var _pw_ti = 0; _pw_ti < _pw_kind; _pw_ti++) {
     var _pw_tobj = global.coopStructObjects[_pw_ti];
@@ -448,21 +463,18 @@ var _pw_n = array_length(_pw_lines);
 for (var _pw_k = 0; _pw_k < _pw_n; _pw_k++) Trace("  " + array_get(_pw_lines, _pw_k));
 Trace("---");
 
-// The file, so a long dump survives a screenshot. Printed to the console first:
-// if opening the file fails, the console still has everything.
-ini_open("coop_probe.ini");
-for (var _pw_w = 0; _pw_w < _pw_n; _pw_w++) {
-    ini_write_string("probe", "line" + string(_pw_w), array_get(_pw_lines, _pw_w));
+// Out of the game. The peer is ours (tools/coop_mockpeer.py) and writes every
+// DEBUG_LINE to %TEMP%\coop_debug.txt, so a dump arrives as text instead of as a
+// screenshot whose digits OCR into nonsense. The begin/end markers say whether
+// what arrived is a whole dump or half of one.
+var _pw_sn = array_length(_pw_tbl);
+CoopSendDebugLine("=== probe begin " + global.coopVersion + " ===");
+for (var _pw_s = 0; _pw_s < _pw_n; _pw_s++) CoopSendDebugLine(array_get(_pw_lines, _pw_s));
+for (var _pw_s2 = 0; _pw_s2 < _pw_sn; _pw_s2++) CoopSendDebugLine(array_get(_pw_tbl, _pw_s2));
+CoopSendDebugLine("=== probe end (" + string(_pw_n) + " world + " + string(_pw_sn) + " table lines) ===");
+if (global.coopSocket < 0) {
+    Trace("Co-op: probe: no peer connected - the table half was dropped (only the lines above exist).");
 }
-ini_write_real("probe", "count", _pw_n);
-var _pw_tn = array_length(_pw_tbl);
-for (var _pw_tw = 0; _pw_tw < _pw_tn; _pw_tw++) {
-    ini_write_string("table", "tbl" + string(_pw_tw), array_get(_pw_tbl, _pw_tw));
-}
-ini_write_real("table", "count", _pw_tn);
-ini_close();
-Trace("Co-op: probe written to coop_probe.ini ("
-      + string(_pw_n) + " world + " + string(_pw_tn) + " table lines).");
 
 #define CoopStatus()
 Trace("--- Co-op status ---");

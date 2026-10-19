@@ -616,6 +616,109 @@ for (var _pa_i = 0; _pa_i < _pa_n; _pa_i++) {
 }
 Trace("---");
 
+#define CoopProbeSpot()
+// F12. Read-only. Is a spot free of *things*, the way water was free of land?
+// The host's spot check catches water only, so an intent for a tile that already
+// holds a furnace, a tree or a rock is applied anyway - a player could not have
+// built there. WaterCollision settled water; nothing in the documented modding API
+// answers occupancy (`General Forager Behavior` lists exactly HasSkill,
+// LighthouseCalculate, WaterCollision), so this measures, it does not guess.
+//
+// Two independent readings, on purpose:
+//   * The collision builtins (instance_position / place_meeting / position_meeting)
+//     are the *right* answer if the loader exports them. data.win holds them, but
+//     that is necessary, not sufficient - `ini_open` is in the build and still
+//     refused. So each one gets its own line; if it is blocked the COMPILE error
+//     names it and we drop that line, not the whole probe.
+//   * An instance-distance count, using only calls already proven live in F10
+//     (instance_number / instance_find / object_is_ancestor). This cannot fail on a
+//     blocked builtin, so the probe still returns a usable answer either way.
+//
+// Everything is read-only: it creates nothing, moves nothing.
+if (!instance_exists(objPlayer)) {
+    Trace("Co-op: F12 needs a loaded world.");
+    exit;
+}
+
+var _ps_px = floor(objPlayer.x);
+var _ps_py = floor(objPlayer.y);
+var _ps_lines = [];
+array_push(_ps_lines, "=== spot probe begin " + global.coopVersion + " ===");
+array_push(_ps_lines, "player " + string(_ps_px) + "," + string(_ps_py)
+           + " depth " + string(objPlayer.depth));
+
+// Which parent objects exist in this build? A name that is missing is worth
+// knowing, because a check that silently measures nothing looks like "free".
+var _ps_pars = ["parStructure", "parResource", "parSolid", "objTile",
+                "objTree", "objRock", "objBush", "objCactus"];
+var _ps_found = [];
+for (var _ps_pi = 0; _ps_pi < array_length(_ps_pars); _ps_pi++) {
+    var _ps_pname = array_get(_ps_pars, _ps_pi);
+    var _ps_pidx  = asset_get_index(_ps_pname);
+    if (_ps_pidx < 0) {
+        array_push(_ps_lines, "parent '" + _ps_pname + "' not in this build");
+    } else {
+        array_push(_ps_found, _ps_pidx);
+        array_push(_ps_lines, "parent '" + _ps_pname + "' #" + string(_ps_pidx)
+                   + " instances " + string(instance_number(_ps_pidx)));
+    }
+}
+
+// 1) The safe reading: how many object instances of the parents above sit within a
+//    build-cell of the player. No collision builtin is involved, so a blocked
+//    builtin cannot lose us this half. A structure is about one tile (16 px), so
+//    anything within ~24 px is sharing the spot.
+var _ps_r = 24;
+var _ps_hits = 0;
+var _ps_np = array_length(_ps_found);
+for (var _ps_fi = 0; _ps_fi < _ps_np; _ps_fi++) {
+    var _ps_obj = array_get(_ps_found, _ps_fi);
+    var _ps_c   = instance_number(_ps_obj);
+    for (var _ps_j = 0; _ps_j < _ps_c; _ps_j++) {
+        var _ps_inst = instance_find(_ps_obj, _ps_j);
+        var _ps_d = point_distance(_ps_inst.x, _ps_inst.y, _ps_px, _ps_py);
+        if (_ps_d <= _ps_r) {
+            _ps_hits += 1;
+            array_push(_ps_lines, "  near " + object_get_name(_ps_inst.object_index)
+                       + " at " + string(floor(_ps_inst.x)) + "," + string(floor(_ps_inst.y))
+                       + " d " + string(round(_ps_d))
+                       + " (parent " + object_get_name(_ps_obj) + ")");
+        }
+    }
+}
+array_push(_ps_lines, "within " + string(_ps_r) + "px of the player: "
+           + string(_ps_hits) + " instance(s) of the parents above");
+
+// 2) The collision builtins would be the *right* answer, and `data.win` holds
+//    `instance_position`, `place_meeting`, `position_meeting` and `place_free`.
+//    But that is necessary, not sufficient - `ini_open` is in the build and the
+//    loader still refused it, taking the whole COMPILE down with one line. So the
+//    candidate stays commented until a dedicated run, exactly like the bare
+//    `WaterCollision` call was. The reading above is the one that cannot fail.
+//
+//    When uncommenting, do it one line at a time and re-COMPILE:
+// var _ps_test = -1;
+// if (array_length(_ps_found) > 0) _ps_test = array_get(_ps_found, 0);
+// if (_ps_test >= 0) {
+//     array_push(_ps_lines, "instance_position(" + string(_ps_px) + "," + string(_ps_py)
+//                + ", " + object_get_name(_ps_test) + ") = "
+//                + string(instance_position(_ps_px, _ps_py, _ps_test)));
+//     array_push(_ps_lines, "place_meeting(" + string(_ps_px) + "," + string(_ps_py)
+//                + ", " + object_get_name(_ps_test) + ") = "
+//                + string(place_meeting(_ps_px, _ps_py, _ps_test)));
+// }
+array_push(_ps_lines, "collision builtins: not tried this run (see the note in F12)");
+
+array_push(_ps_lines, "=== spot probe end ===");
+
+var _ps_n = array_length(_ps_lines);
+Trace("--- Co-op spot probe ---");
+for (var _ps_i = 0; _ps_i < _ps_n; _ps_i++) {
+    Trace("  " + array_get(_ps_lines, _ps_i));
+    CoopSendDebugLine(array_get(_ps_lines, _ps_i));
+}
+Trace("---");
+
 #define CoopStatus()
 Trace("--- Co-op status ---");
 Trace("version " + global.coopVersion + ", protocol " + string(global.coopProtocol)

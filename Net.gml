@@ -200,8 +200,117 @@ return -1;
 if (_id >= 0 && _id < array_length(global.coopStructObjects)) return global.coopStructObjects[_id];
 return -1;
 
-#define CoopStructDepth(_y)
-// Forager y-sorts the world: an instance's depth is its negated y. The F10 probe
+// ---------------------------------------------------------------------------
+// M2.2 - the item database.
+//
+// Both directions of resource sync travel as an item **id**: a drop says "item 3,
+// quantity 1 landed at (x,y)", a pickup says "item 3 left the world". For that to
+// mean the same thing on both machines, the ids have to line up. The structure
+// table taught us how to check that (CoopSendStructureTable + the mismatch
+// warning); the same idea is reused here.
+//
+// Every call below is one the docs list for the item database AND that this build
+// exports (checked against its symbol table: ItemGet, ItemCount, GainItem,
+// RemoveItem, DropItem each appear once). They are used inside a lazy builder or a
+// probe, never at Main's registration pass - a build whose item database is not up
+// yet must cost one console line, not a crash.
+// ---------------------------------------------------------------------------
+
+#define CoopBuildItemDb()
+// Reads the game's item database into global.coopItemNames (id -> lowercase name).
+// Lazy, like CoopBuildStructDb: Item.Count is not guaranteed to be final while
+// Main runs, and a session that never touches resources should not pay for it.
+global.coopItemNames = [];
+global.coopItemCount = Item.Count;
+for (var _bi_i = 0; _bi_i < global.coopItemCount; _bi_i++) {
+    var _bi_nm = ItemGet(_bi_i, ItemData.Name);
+    global.coopItemNames[_bi_i] = string_lower(string(_bi_nm));
+}
+Trace("Co-op: item database cached (" + string(global.coopItemCount) + " entries).");
+
+#define CoopItemName(_id)
+// -> the lowercase name of an item id, or "" when the id is outside the database.
+if (array_length(global.coopItemNames) == 0) CoopBuildItemDb();
+if (_id < 0 || _id >= array_length(global.coopItemNames)) return "";
+return global.coopItemNames[_id];
+
+#define CoopFindItem(_name)
+// -> id of the item called _name, or -1. The mirror of CoopFindStructure, and for
+//    the same reason: a name is what a human reads in a log, an id is what travels.
+if (array_length(global.coopItemNames) == 0) CoopBuildItemDb();
+var _fi_want = string_lower(_name);
+var _fi_n    = array_length(global.coopItemNames);
+for (var _fi_i = 0; _fi_i < _fi_n; _fi_i++) {
+    if (global.coopItemNames[_fi_i] == _fi_want) return _fi_i;
+}
+return -1;
+
+#define CoopSendItemTable()
+// Our item database, as id/name pairs, so a divergence between two installs is
+// visible before it turns into a wrong item on someone's island.
+if (array_length(global.coopItemNames) == 0) CoopBuildItemDb();
+var _it_b = buffer_create(512, buffer_grow, 1);
+buffer_write(_it_b, buffer_u8, CoopCmd.ITEM_TABLE);
+buffer_write(_it_b, buffer_u16, global.coopItemCount);
+for (var _it_i = 0; _it_i < global.coopItemCount; _it_i++) {
+    buffer_write(_it_b, buffer_u16, _it_i);
+    buffer_write(_it_b, buffer_string, global.coopItemNames[_it_i]);
+}
+CoopSend(_it_b);
+
+#define CoopProbeItems()
+// F3. Read-only. Measures the item half of M2.2 before a single byte of loot sync
+// is written: how many items does this build have, do the ids we care about
+// (Wood, Stone, Coin) resolve to the same numbers the docs and PencilPal assume,
+// and does the item database agree between `ItemGet(id, ItemData.Name)` and the
+// sprite it points at?
+//
+// It creates nothing, drops nothing and gains nothing: ItemCount is a read.
+if (!instance_exists(objPlayer)) {
+    Trace("Co-op: F3 needs a loaded world.");
+    exit;
+}
+
+var _pi_count = Item.Count;
+CoopBuildItemDb();
+
+var _pi_lines = [];
+array_push(_pi_lines, "=== item probe begin " + global.coopVersion + " ===");
+array_push(_pi_lines, "Item.Count = " + string(_pi_count)
+           + ", cached " + string(global.coopItemCount));
+
+// 1) The named anchors. If Wood/Stone/Coin resolve to the same ids in both
+//    installs, a drop of "Wood" means the same thing on either machine. Wood and
+//    Stone are the two the docs' enum example uses; Coin is the one PencilPal
+//    spends and counts.
+var _pi_anchors = [["Wood", Item.Wood], ["Stone", Item.Stone], ["Coin", Item.Coin]];
+for (var _pi_ai = 0; _pi_ai < array_length(_pi_anchors); _pi_ai++) {
+    var _pi_an = array_get(array_get(_pi_anchors, _pi_ai), 0);
+    var _pi_av = array_get(array_get(_pi_anchors, _pi_ai), 1);
+    array_push(_pi_lines, "anchor " + _pi_an + " = " + string(_pi_av)
+               + "  name '" + CoopItemName(_pi_av) + "'"
+               + "  found-by-name " + string(CoopFindItem(_pi_an))
+               + "  owned " + string(ItemCount(_pi_av, false)));
+}
+
+// 2) The whole table, first and last few, so a shift in one build shows up as a
+//    name landing on the wrong id. The full table goes to the peer as a packet.
+var _pi_show = 6;
+for (var _pi_i = 0; _pi_i < global.coopItemCount; _pi_i++) {
+    if (_pi_i >= _pi_show && _pi_i < global.coopItemCount - _pi_show) continue;
+    array_push(_pi_lines, "item #" + string(_pi_i) + " '" + global.coopItemNames[_pi_i] + "'");
+}
+
+array_push(_pi_lines, "=== item probe end ===");
+var _pi_n = array_length(_pi_lines);
+Trace("--- Co-op item probe ---");
+for (var _pi_j = 0; _pi_j < _pi_n; _pi_j++) {
+    Trace("  " + array_get(_pi_lines, _pi_j));
+    CoopSendDebugLine(array_get(_pi_lines, _pi_j));
+}
+Trace("---");
+
+#define CoopStructDepth(_y)// Forager y-sorts the world: an instance's depth is its negated y. The F10 probe
 // (2026-10-20) found the player at y=656, depth -656, and a hand-built furnace at
 // y=656, depth -656. instance_create_depth() with depth 0 therefore drops a
 // peer's structure onto the wrong layer, so we compute the game's own value
@@ -836,6 +945,7 @@ switch (_cmd) {
         global.coopPeerAlive   = true;
         CoopSendWelcome();
         CoopSendStructureTable();
+        CoopSendItemTable();
         global.coopSeq = 0;   // a fresh peer starts from a clean sequence
         Trace("Co-op: handshake complete, peer is " + _v + ".");
         break;
@@ -1015,6 +1125,26 @@ switch (_cmd) {
               + " names match ours.");
         if (_match < _tn) {
             Trace("Co-op: WARNING - our structure databases differ; the two installs are not the same build.");
+        }
+        break;
+
+    case CoopCmd.ITEM_TABLE:
+        // Same divergence check as the structure table, for M2.2. Every loot
+        // packet carries an item id, so a shifted database would turn "wood"
+        // into "stone" silently; this makes it loud instead.
+        if (array_length(global.coopItemNames) == 0) CoopBuildItemDb();
+        var _itn     = buffer_read(_buf, buffer_u16);
+        var _itmatch = 0;
+        for (var _iti = 0; _iti < _itn; _iti++) {
+            var _itid   = buffer_read(_buf, buffer_u16);
+            var _itname = buffer_read(_buf, buffer_string);
+            if (_itid < array_length(global.coopItemNames)
+                && global.coopItemNames[_itid] == _itname) _itmatch += 1;
+        }
+        Trace("Co-op: host item table: " + string(_itmatch) + "/" + string(_itn)
+              + " names match ours.");
+        if (_itmatch < _itn) {
+            Trace("Co-op: WARNING - our item databases differ; loot would arrive as the wrong item.");
         }
         break;
 

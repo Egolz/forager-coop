@@ -10,7 +10,11 @@
 //
 // Controls:  F5 = host   F6 = join   F7 = disconnect   F8 = status
 //            F9 = dump structures   F10 = probe the world   F11 = probe the API
-//            (see Net.gml)
+//            F12 = probe the spot   F3 = probe the item database (see Net.gml)
+//
+// The hotkeys are the first free function keys in this build: F1-F2 are the game's
+// own help/console helpers and F4 is alt-F4-adjacent on some layouts, so the probes
+// start at F3 rather than at F1.
 // Console for Trace output: the `t` key.
 // ============================================================================
 
@@ -27,10 +31,12 @@ enum CoopCmd {
     MUTATION_PLACE   = 9,   // host -> client: this structure exists now, at sequence N
     INTENT_REJECTED  = 10,  // host -> client: that intent is refused, and here is why
     STRUCTURE_TABLE  = 11,  // host -> client: the structure id/name list
-    DEBUG_LINE       = 12   // either way: one line of the sender's console
+    DEBUG_LINE       = 12,  // either way: one line of the sender's console
+    // --- M2.2: resources and loot ---
+    ITEM_TABLE       = 13   // host -> client: the item id/name list (see NET protocol doc)
 }
 
-global.coopVersion  = "0.0.11-m2i";
+global.coopVersion  = "0.0.12-m2j";
 global.coopProtocol = 3;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console
 global.coopPort     = 6511;
@@ -71,6 +77,13 @@ global.coopApplyingRemote = false; // re-entrancy guard: we are applying a peer'
 // mod that is never in a session should not pay for it at all.
 global.coopStructNames   = [];  // id -> lowercase name, e.g. "forge"
 global.coopStructObjects = [];  // id -> object index, e.g. objForge
+
+// M2.2. The item database, snapshotted the same lazy way (CoopBuildItemDb in
+// Net.gml). A resource drop and a pickup both travel as an **item id**, and the
+// two installs must agree on what id 12 means, so the table is shipped to the peer
+// on join and compared, exactly like the structure table.
+global.coopItemNames = [];      // id -> lowercase name from ItemGet(id, ItemData.Name)
+global.coopItemCount = 0;       // Item.Count at the time we last looked
 
 Trace("Forager Co-op " + global.coopVersion + " loaded (protocol "
       + string(global.coopProtocol) + ", port " + string(global.coopPort) + ").");

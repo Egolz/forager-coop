@@ -29,6 +29,7 @@ Mod packets (little-endian; GameMaker buffer_string = UTF-8 + NUL):
     10 INTENT_REJECTED  u32 intentId, string reason
     11 STRUCTURE_TABLE  u16 count, { u16 id, string name } * count
     12 DEBUG_LINE       string text
+    13 ITEM_TABLE       u16 count, { u16 id, string name } * count
 
 Usage (from the repo root, with the game running and the mod loaded):
 
@@ -74,13 +75,14 @@ HANDSHAKE_PRE = 0xDEADC0DE
 HELLO, WELCOME, REJECT, PING, PONG, POS, BYE = 1, 2, 3, 4, 5, 6, 7
 INTENT_PLACE, MUTATION_PLACE, INTENT_REJECTED, STRUCTURE_TABLE = 8, 9, 10, 11
 DEBUG_LINE = 12
+ITEM_TABLE = 13
 
 NAMES = {
     HELLO: "HELLO", WELCOME: "WELCOME", REJECT: "REJECT",
     PING: "PING", PONG: "PONG", POS: "POS", BYE: "BYE",
     INTENT_PLACE: "INTENT_PLACE", MUTATION_PLACE: "MUTATION_PLACE",
     INTENT_REJECTED: "INTENT_REJECTED", STRUCTURE_TABLE: "STRUCTURE_TABLE",
-    DEBUG_LINE: "DEBUG_LINE",
+    DEBUG_LINE: "DEBUG_LINE", ITEM_TABLE: "ITEM_TABLE",
 }
 
 # structures to try to build if we are not told which one (first match wins)
@@ -162,6 +164,14 @@ def structure_table(entries: list[tuple[int, str]]) -> bytes:
 def debug_line(text: str) -> bytes:
     """One line of the sender's console (packet 12). See DEBUG_LINE above."""
     return bytes([DEBUG_LINE]) + p_str(text)
+
+
+def item_table(entries: list[tuple[int, str]]) -> bytes:
+    """The item database, id -> name (packet 13). Same shape as packet 11."""
+    out = bytes([ITEM_TABLE]) + struct.pack("<H", len(entries))
+    for iid, name in entries:
+        out += struct.pack("<H", iid) + p_str(name)
+    return out
 
 
 def bye(reason: str) -> bytes:
@@ -256,6 +266,23 @@ def parse_one(buf: bytes):
             name, i = s
             entries.append((sid, name))
         return {"cmd": cmd, "name": NAMES[cmd], "entries": entries}, i
+    if cmd == ITEM_TABLE:
+        if len(buf) < 3:
+            return None, 0
+        (count,) = struct.unpack("<H", buf[1:3])
+        i = 3
+        items = []
+        for _ in range(count):
+            if i + 2 > len(buf):
+                return None, 0
+            (iid,) = struct.unpack("<H", buf[i:i + 2])
+            i += 2
+            s = _read_str(buf, i)
+            if s is None:
+                return None, 0
+            name, i = s
+            items.append((iid, name))
+        return {"cmd": cmd, "name": NAMES[cmd], "entries": items}, i
     if cmd == DEBUG_LINE:
         s = _read_str(buf, 1)
         if s is None:
@@ -285,6 +312,8 @@ def describe(pkt: dict) -> str:
         return f"INTENT_REJECTED #{pkt['intentId']}: {pkt['reason']!r}"
     if name == "STRUCTURE_TABLE":
         return f"STRUCTURE_TABLE {len(pkt['entries'])} entries"
+    if name == "ITEM_TABLE":
+        return f"ITEM_TABLE {len(pkt['entries'])} entries"
     if name == "DEBUG_LINE":
         return f"DEBUG {pkt['text']}"
     return f"{name} reason={pkt.get('reason')!r}"
@@ -315,6 +344,7 @@ class Peer:
         self.pos_logged = None      # last position we bothered to print
         self.px, self.py = 620, 620 # where our own puppet currently is
         self.structs: list[tuple[int, str]] = []
+        self.items: list[tuple[int, str]] = []
         self.place_wanted = place   # None = auto, "" = do not ask
         self.place_index = place_index  # ask for this id from the host's table
         self.placed = False
@@ -447,6 +477,9 @@ class Peer:
             # game running, which is how a bug in that path is caught.
             self.send(structure_table([(0, "land"), (1, "forge")]))
             log("-> STRUCTURE_TABLE 2 entries")
+            # The real host sends its item table right after, too (M2.2).
+            self.send(item_table([(0, "wood"), (1, "stone"), (2, "coin")]))
+            log("-> ITEM_TABLE 3 entries")
             # One DEBUG_LINE so the offline test covers packet 12 too: in the
             # real thing this is how the game's long dumps reach us.
             self.send(debug_line("e2e: a debug line from the mock host"))
@@ -465,6 +498,20 @@ class Peer:
             dump_structs(self.structs)
             if not self.placed and self.place_wanted != "":
                 self.place_due = time.time() + 2.0   # give the game a moment
+        elif name == "ITEM_TABLE":
+            self.items = pkt["entries"]
+            log(f"   host knows {len(self.items)} items: "
+                + ", ".join(f"#{i}:{n}" for i, n in self.items[:8])
+                + (" ..." if len(self.items) > 8 else ""))
+            # A divergence check, the same way the structure table gets one: the
+            # two installs must agree on what an item id means before any loot
+            # packet can travel. The anchors are the ids M2.2 leans on.
+            if self.items:
+                first = self.items[:8]
+                tail = self.items[-4:]
+                debug_note("item table: " + f"{len(self.items)} entries; "
+                           + "head " + ", ".join(f"#{i}={n}" for i, n in first)
+                           + "; tail " + ", ".join(f"#{i}={n}" for i, n in tail))
         elif name == "PING":
             self.send(pong(pkt["nonce"]))
             log(f"-> PONG nonce={pkt['nonce']}")
@@ -667,12 +714,14 @@ def run_selftest() -> int:
            + struct.pack("<H", 1) + p_str("forge"))
     rej = bytes([INTENT_REJECTED]) + struct.pack("<I", 9) + p_str("too far")
     dbg = debug_line("probe: table #0 obj objForge isStruct=1")
+    itm = item_table([(0, "wood"), (1, "stone"), (2, "coin")])
     for payload, name, checks in [
         (mut, "MUTATION_PLACE", {"seq": 12, "intentId": 9, "x": 640, "y": 704,
                                  "depth": -10, "structure": "forge"}),
         (tbl, "STRUCTURE_TABLE", {"entries": [(0, "land"), (1, "forge")]}),
         (rej, "INTENT_REJECTED", {"intentId": 9, "reason": "too far"}),
         (dbg, "DEBUG_LINE", {"text": "probe: table #0 obj objForge isStruct=1"}),
+        (itm, "ITEM_TABLE", {"entries": [(0, "wood"), (1, "stone"), (2, "coin")]}),
     ]:
         try:
             pkt, used = parse_one(payload)
@@ -764,7 +813,7 @@ def run_selftest() -> int:
         for f in failures:
             log(f"FAIL {f}")
         return 1
-    log(f"selftest: {len(cases) + 4} packets encode/parse correctly, spot-retry ok")
+    log(f"selftest: {len(cases) + 5} packets encode/parse correctly, spot-retry ok")
     return 0
 
 

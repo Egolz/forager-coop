@@ -38,6 +38,7 @@ $want = @(
     "<- WELCOME protocol=3",
     "<- PONG",
     "<- STRUCTURE_TABLE",
+    "<- ITEM_TABLE",
     "<- DEBUG e2e: a debug line from the mock host",
     "-> INTENT_PLACE"
 )
@@ -49,6 +50,6 @@ if ($failed.Count -gt 0) {
     Write-Host "--- client log ---"; Get-Content $cliLog -Tail 20
     exit 1
 }
-Write-Host "e2e ok: handshake, welcome, pong, structure table and INTENT_PLACE all seen"
+Write-Host "e2e ok: handshake, welcome, pong, structure table, item table and INTENT_PLACE all seen"
 Write-Host "(logs in $log)"
 exit 0

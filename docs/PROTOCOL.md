@@ -65,6 +65,7 @@ with a confirmed mutation. See the model in the hub's `games/forager/DESIGN.md`.
 | 10 | `INTENT_REJECTED` | host → client | `u32 intentId`, `string reason` |
 | 11 | `STRUCTURE_TABLE` | host → client | `u16 count`, `{ u16 id, string name } × count` |
 | 12 | `DEBUG_LINE` | either way | `string text` |
+| 13 | `ITEM_TABLE` | host → client | `u16 count`, `{ u16 id, string name } × count` |
 
 Notes:
 
@@ -100,6 +101,10 @@ Notes:
   `objEmpty`) — an earlier 64-entry cap hid part of the table and the client's automatic
   choice landed on a header, so the host dutifully created an `objEmpty` and nothing
   appeared in the world (live, 2026-10-20). The mock now skips the headers when it picks.
+- `ITEM_TABLE` (13) is the same shape and the same idea for M2.2: every loot packet will
+  carry an **item id**, so the ids have to mean the same thing on both installs. A shifted
+  database would turn "wood" into "stone" silently - this packet makes it loud instead.
+  Unlike the structure table it is **not** pruned: an item row always has a name.
 - `MUTATION_PLACE.depth` is informational. Forager y-sorts the world: an instance sits at
   `depth = -y` (probe, 2026-10-20: the player at y=656 had depth -656, and so did a
   hand-built furnace). The host's `OnStructureSpawn()` fires *before* the game sets that

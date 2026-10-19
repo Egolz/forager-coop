@@ -30,7 +30,7 @@ enum CoopCmd {
     DEBUG_LINE       = 12   // either way: one line of the sender's console
 }
 
-global.coopVersion  = "0.0.6-m2d";
+global.coopVersion  = "0.0.7-m2e";
 global.coopProtocol = 3;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console
 global.coopPort     = 6511;

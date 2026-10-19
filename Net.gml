@@ -649,6 +649,10 @@ array_push(_ps_lines, "player " + string(_ps_px) + "," + string(_ps_py)
 
 // Which parent objects exist in this build? A name that is missing is worth
 // knowing, because a check that silently measures nothing looks like "free".
+// `parSolid` is the parent the first live run (2026-10-20) showed every tree and
+// rock sitting under - it caught both with one number. What is still open is
+// whether a *structure* (objFurnace) also descends from it, or from a separate
+// branch, so the chain below is dumped rather than assumed.
 var _ps_pars = ["parStructure", "parResource", "parSolid", "objTile",
                 "objTree", "objRock", "objBush", "objCactus"];
 var _ps_found = [];
@@ -662,6 +666,30 @@ for (var _ps_pi = 0; _ps_pi < array_length(_ps_pars); _ps_pi++) {
         array_push(_ps_lines, "parent '" + _ps_pname + "' #" + string(_ps_pidx)
                    + " instances " + string(instance_number(_ps_pidx)));
     }
+}
+
+// 0) The parent chain of the objects that decide occupancy. object_get_parent is
+//    already proven live in F10, so this cannot fail on a blocked builtin. Walking
+//    it answers the one question the check's shape depends on: does a built
+//    structure share an ancestor with a tree and a rock? If yes, one rule covers
+//    all three; if no, the host needs a second rule.
+var _ps_chainof = ["objFurnace", "objTree", "objRock", "parSolid", "parStructure"];
+for (var _ps_ci = 0; _ps_ci < array_length(_ps_chainof); _ps_ci++) {
+    var _ps_cname = array_get(_ps_chainof, _ps_ci);
+    var _ps_cobj  = asset_get_index(_ps_cname);
+    if (_ps_cobj < 0) {
+        array_push(_ps_lines, "chain '" + _ps_cname + "': not in this build");
+        continue;
+    }
+    var _ps_walk = "chain " + _ps_cname + " -> ";
+    var _ps_up   = _ps_cobj;
+    var _ps_guard = 0;
+    while (_ps_up >= 0 && _ps_guard < 16) {
+        _ps_walk += object_get_name(_ps_up) + " ";
+        _ps_up = object_get_parent(_ps_up);
+        _ps_guard += 1;
+    }
+    array_push(_ps_lines, _ps_walk);
 }
 
 // 1) The safe reading: how many object instances of the parents above sit within a

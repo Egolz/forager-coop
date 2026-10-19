@@ -209,6 +209,28 @@ return -1;
 // without carrying it on the wire.
 return -floor(_y);
 
+#define CoopSolidNear(_x, _y)
+// How many "solid" things share the build-cell of (_x,_y)? parSolid is the one
+// ancestor that every tree, rock, bush *and* built structure descends from - the
+// live F12 probe (2026-10-20) walked the chains:
+//     objFurnace -> objFurnace parStructure parObject parSolid
+//     objTree    -> objTree    parNatural   parObject parSolid
+//     objRock    -> objRock    parNatural   parObject parSolid
+// so a single rule against parSolid covers all of them; parStructure alone would
+// miss trees and rocks, and it also has no instances of its own (the game keeps a
+// furnace under objFurnace). Only calls already proven live are used here
+// (asset_get_index, instance_number, instance_find, point_distance) - no collision
+// builtin, which is exactly what keeps this honest before one is tested.
+if (global.coopSolidObj == -2) global.coopSolidObj = asset_get_index("parSolid");
+if (global.coopSolidObj < 0) return 0;
+var _sld_hits = 0;
+var _sld_n = instance_number(global.coopSolidObj);
+for (var _sld_i = 0; _sld_i < _sld_n; _sld_i++) {
+    var _sld_inst = instance_find(global.coopSolidObj, _sld_i);
+    if (point_distance(_sld_inst.x, _sld_inst.y, _x, _y) <= global.coopSolidRadius) _sld_hits += 1;
+}
+return _sld_hits;
+
 #define CoopStructureNameOf(_struc, _obj)
 // The name of the structure an instance belongs to. OnStructureSpawn() hands us
 // a structure id; if that id is not one we cached, fall back to the object.
@@ -881,6 +903,16 @@ switch (_cmd) {
         if (WaterCollision(_ix, _iy) != 0) {
             CoopSendIntentRejected(_iid, "that spot is on water");
             Trace("Co-op: refused intent #" + string(_iid) + " - water at "
+                  + string(_ix) + "," + string(_iy) + ".");
+            break;
+        }
+        // Occupied? A player can build on bare ground only - not on a tree, a rock
+        // or an existing structure. WaterCollision answers water; this answers
+        // "something is already standing here", measured against parSolid, the one
+        // ancestor trees, rocks and buildings share (F12, live 2026-10-20).
+        if (CoopSolidNear(_ix, _iy) > 0) {
+            CoopSendIntentRejected(_iid, "that spot is already occupied");
+            Trace("Co-op: refused intent #" + string(_iid) + " - solid at "
                   + string(_ix) + "," + string(_iy) + ".");
             break;
         }

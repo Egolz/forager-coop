@@ -484,12 +484,12 @@ class Peer:
             # refusal and an accepted placement.
             log(f"   (refused: {pkt['reason']})")
             if pkt["intentId"] == self.last_intent and not self.mutation_seen:
-                if "water" not in pkt["reason"]:
+                if "water" not in pkt["reason"] and "occupied" not in pkt["reason"]:
                     # Any other refusal is not a spot problem - walking the ring
                     # would just repeat it. Stop and say so, so the reason is the
                     # finding rather than ten identical lines.
                     self.placed = True
-                    log(f"!! the host refused for a reason that is not water: {pkt['reason']}")
+                    log(f"!! the host refused for a reason that is not water or occupancy: {pkt['reason']}")
                     return
                 self.place_try += 1
                 if self.place_try < len(self.place_spots):
@@ -570,11 +570,15 @@ class Peer:
             if not self.place_spots:
                 # A ring of offsets around the game's player: the first is the one we
                 # used before (a little to the right), then further out in each
-                # direction, so a pond or a shoreline is stepped over instead of
-                # ending the test. All stay inside the host's 448 px range check.
+                # direction, so a pond, a shoreline or a tree is stepped over instead
+                # of ending the test. All stay inside the host's 448 px range check.
+                # Two obstacles can now refuse a spot - water and occupancy - so the
+                # ring is denser than the water-only version was.
                 self.place_spots = [(128, 0), (-128, 0), (0, 128), (0, -128),
                                     (192, 96), (-192, 96), (192, -96), (-192, -96),
-                                    (256, 0), (0, 256)]
+                                    (256, 0), (0, 256), (256, 128), (-256, 128),
+                                    (256, -128), (-256, -128), (128, 192), (-128, 192),
+                                    (128, -192), (-128, -192), (320, 0), (0, 320)]
             dx, dy = self.place_spots[self.place_try % len(self.place_spots)]
             tx, ty = (px + dx, py + dy)
             room = self.room if self.room else 8

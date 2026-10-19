@@ -59,10 +59,11 @@ global.coopApplyingRemote = false; // re-entrancy guard: we are applying a peer'
 
 // A snapshot of the game's structure database, so a name can be turned into an
 // id and an object index without scanning the database on every packet.
-// CoopBuildStructDb() lives in Net.gml and rebuilds these two arrays.
+// It is built **lazily** by CoopBuildStructDb() in Net.gml: the database may not
+// be up yet while Main runs (Main executes during the registration pass), and a
+// mod that is never in a session should not pay for it at all.
 global.coopStructNames   = [];  // id -> lowercase name, e.g. "forge"
 global.coopStructObjects = [];  // id -> object index, e.g. objForge
-CoopBuildStructDb();
 
 Trace("Forager Co-op " + global.coopVersion + " loaded (protocol "
       + string(global.coopProtocol) + ", port " + string(global.coopPort) + ").");

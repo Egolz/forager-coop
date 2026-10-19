@@ -108,8 +108,8 @@ There is no build step: edit the files, run `tools/deploy.ps1`, then **COMPILE**
 game's modding menu.
 
 **Run the checker before every deploy.** A mod that fails to compile does not announce
-itself in-game: no error on screen, its events simply never run. Two ways this bit us
-already, both now caught offline:
+itself in-game: no error on screen, its events simply never run. Three ways this bit us
+already, all now caught offline:
 
 - **No value macros.** `#define PLACE_RANGE 448` is rejected by this loader
   (`Expected a statement, got number`) and takes the whole mod down. A macro body must be
@@ -117,6 +117,17 @@ already, both now caught offline:
 - **Not every GML builtin exists here.** `array_delete()` and `variable_instance_exists()`
   are absent from this build's symbol table. The checker looks every function you call up
   in `data.win`, so pass `--data-win` (or set `FORAGER_DATA_WIN`) and it will tell you.
+- **`try`/`catch` cannot be compiled at all** — it crashes the game on COMPILE, and again on
+  every later launch. The game's `%LOCALAPPDATA%\Forager\error.log` is the only place that
+  says so:
+
+  ```
+  Can't seekAllOut over Forager Coop/Net.gml[L150,c1] try_catch
+  ```
+
+  Guard with an `if` instead. (This is also why the big PencilPal mod currently cannot be
+  recompiled: it uses try/catch throughout.) When a mod does nothing, or the game dies on
+  COMPILE, **read `error.log` first** — it gives a file and line for mod code.
 
 ```powershell
 python tools/check_gml.py              # uses the default Steam path

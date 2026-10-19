@@ -100,6 +100,28 @@ def find_defines(text: str) -> list[tuple[str, int, str]]:
     return blocks
 
 
+def check_forbidden(where: str, text: str, problems: list[str]) -> None:
+    """Constructs this build's mod compiler cannot compile at all.
+
+    `try`/`catch` is the important one, and it is not a style preference: the
+    loader compiles mod GML into its own AST, and a try_catch node makes that
+    compiler give up. The game dies with
+
+        ERROR in Other Event: User Defined 0 for object ModControl:
+        Can't seekAllOut over Forager Coop/Net.gml[L150,c1] try_catch
+
+    (the owner's error.log, live build, 2026-10-20) and the mod never loads. It
+    also matches PencilPal's own TODO, "Fix recompile crashing game": that mod
+    uses try/catch in Networking.gml and GUI.gml. Guard with an `if` instead.
+    """
+    for ln, line in enumerate(text.splitlines(), 1):
+        m = re.search(r"\b(try|catch)\b", line)
+        if m:
+            problems.append(f"{where}:{ln}: `{m.group(1)}` - this loader cannot compile "
+                            f"try/catch; the game crashes and the mod never loads. "
+                            f"Use an `if` guard.")
+
+
 def define_arity(body: str) -> int:
     head = DEFINE.match(body)
     if head is None or head.group(2) is None:
@@ -246,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     for f in files:
         text = stripped[f]
         where = f.relative_to(here) if here in f.parents else f
+        check_forbidden(str(where), text, problems)
         blocks = find_defines(text)
         if not blocks:
             problems.append(f"{where}: no #define found")

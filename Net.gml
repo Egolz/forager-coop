@@ -143,20 +143,22 @@ CoopSend(_b);
 
 #define CoopBuildStructDb()
 // Reads the game's structure database into global.coopStructNames/Objects
-// (id -> lowercase name / object index). Called once at load and again lazily,
-// because the database is not guaranteed to be up when the mod first loads.
+// (id -> lowercase name / object index). Built lazily (the database is not
+// guaranteed to be up when the mod first loads) and only while a peer is
+// around, so a build that cannot read it costs one console line, not a crash.
+//
+// There is deliberately **no try/catch**: this loader's compiler cannot compile
+// a try_catch node at all - the game dies with "Can't seekAllOut over
+// <file>[L150,c1] try_catch" (error.log, live build, 2026-10-20) and the mod
+// never loads. Same reason PencilPal's TODO says "Fix recompile crashing game".
 global.coopStructNames   = [];
 global.coopStructObjects = [];
-try {
-    var _bd_n = Structure.Count;
-    for (var _bd_i = 0; _bd_i < _bd_n; _bd_i++) {
-        global.coopStructNames[_bd_i]   = string_lower(StructureGet(_bd_i, StructureData.Name));
-        global.coopStructObjects[_bd_i] = StructureGet(_bd_i, StructureData.Object);
-    }
-    Trace("Co-op: structure database cached (" + string(_bd_n) + " entries).");
-} catch (_bd_err) {
-    Trace("Co-op: could not read the structure database: " + string(_bd_err));
+var _bd_n = Structure.Count;
+for (var _bd_i = 0; _bd_i < _bd_n; _bd_i++) {
+    global.coopStructNames[_bd_i]   = string_lower(StructureGet(_bd_i, StructureData.Name));
+    global.coopStructObjects[_bd_i] = StructureGet(_bd_i, StructureData.Object);
 }
+Trace("Co-op: structure database cached (" + string(_bd_n) + " entries).");
 
 #define CoopFindStructure(_name)
 // -> id of the structure called _name, or -1
@@ -207,21 +209,13 @@ if (_cs_obj < 0) return -1;
 var _cs_where = CoopStructureAt(_cs_obj, _x, _y);
 if (_cs_where >= 0) {
     // already there - usually our own optimistic placement, so adopt it
-    try {
-        _cs_where.structure = _sid;
-    } catch (_cs_werr) {
-        Trace("Co-op: could not set .structure on the existing instance: " + string(_cs_werr));
-    }
+    _cs_where.structure = _sid;
     return _cs_where;
 }
 
 global.coopApplyingRemote = true;
 var _cs_new = instance_create_depth(floor(_x), floor(_y), floor(_depth), _cs_obj);
-try {
-    _cs_new.structure = _sid;
-} catch (_cs_nerr) {
-    Trace("Co-op: could not set .structure on the new instance: " + string(_cs_nerr));
-}
+_cs_new.structure = _sid;
 global.coopApplyingRemote = false;
 return _cs_new;
 
@@ -323,19 +317,16 @@ for (var _st_i = 0; _st_i < _st_n; _st_i++) {
 CoopSend(_st_b);
 
 #define CoopDumpStructures()
+if (array_length(global.coopStructNames) == 0) CoopBuildStructDb();
 Trace("--- Co-op: structure database (" + string(array_length(global.coopStructNames)) + " entries) ---");
-try {
-    var _ds_n = array_length(global.coopStructNames);
-    if (_ds_n > 24) _ds_n = 24;
-    for (var _ds_i = 0; _ds_i < _ds_n; _ds_i++) {
-        var _ds_obj = global.coopStructObjects[_ds_i];
-        Trace("#" + string(_ds_i) + "  " + global.coopStructNames[_ds_i]
-              + "  (" + (_ds_obj >= 0 ? object_get_name(_ds_obj) : "?") + ")");
-    }
-    if (_ds_n < array_length(global.coopStructNames)) Trace("... first " + string(_ds_n) + " only");
-} catch (_ds_err) {
-    Trace("Co-op: could not dump structures: " + string(_ds_err));
+var _ds_n = array_length(global.coopStructNames);
+if (_ds_n > 24) _ds_n = 24;
+for (var _ds_i = 0; _ds_i < _ds_n; _ds_i++) {
+    var _ds_obj = global.coopStructObjects[_ds_i];
+    Trace("#" + string(_ds_i) + "  " + global.coopStructNames[_ds_i]
+          + "  (" + (_ds_obj >= 0 ? object_get_name(_ds_obj) : "?") + ")");
 }
+if (_ds_n < array_length(global.coopStructNames)) Trace("... first " + string(_ds_n) + " only");
 Trace("---");
 
 #define CoopStatus()
@@ -515,6 +506,7 @@ switch (_cmd) {
     case CoopCmd.STRUCTURE_TABLE:
         // The host's view of the structure database. We already have our own, so
         // this is a divergence check between the two installs.
+        if (array_length(global.coopStructNames) == 0) CoopBuildStructDb();
         var _tn    = buffer_read(_buf, buffer_u16);
         var _match = 0;
         for (var _t = 0; _t < _tn; _t++) {

@@ -319,6 +319,14 @@ class Peer:
         self.place_index = place_index  # ask for this id from the host's table
         self.placed = False
         self.place_due = 0.0
+        # A spot the host refused because it is water. We walk a short list of
+        # candidate offsets around the game's player until one is accepted, so a
+        # single run exercises both the refusal and a real placement - the mock has
+        # no WaterCollision of its own, so trying is how it learns where the land is.
+        self.place_try = 0
+        self.place_spots: list[tuple[int, int]] = []
+        self.last_spot: tuple[int, int] | None = None
+        self.mutation_seen = False
         self.sock.settimeout(0.2)
 
     # -- sending ------------------------------------------------------------
@@ -469,6 +477,37 @@ class Peer:
             # The mod's own console, forwarded: this game's mods cannot write
             # files, so a long dump arrives here and we write it down.
             debug_note(pkt["text"])
+        elif name == "INTENT_REJECTED":
+            # The host refused our build request. If the reason is that the spot is
+            # water, try the next candidate offset - this is also the positive
+            # control for the host's new spot check: a run should log both a water
+            # refusal and an accepted placement.
+            log(f"   (refused: {pkt['reason']})")
+            if pkt["intentId"] == self.last_intent and not self.mutation_seen:
+                if "water" not in pkt["reason"]:
+                    # Any other refusal is not a spot problem - walking the ring
+                    # would just repeat it. Stop and say so, so the reason is the
+                    # finding rather than ten identical lines.
+                    self.placed = True
+                    log(f"!! the host refused for a reason that is not water: {pkt['reason']}")
+                    return
+                self.place_try += 1
+                if self.place_try < len(self.place_spots):
+                    self.place_due = time.time() + 0.5   # ask again elsewhere
+                    log(f"   retrying at another spot (water was at {self.last_spot})")
+                else:
+                    self.placed = True
+                    log("!! every candidate spot was refused - all water near the player")
+        elif name == "MUTATION_PLACE":
+            # A confirmed placement. If it is the answer to our own intent we are
+            # done, and the spot we asked for was land - the positive half of the
+            # spot-check test.
+            if pkt["intentId"] and pkt["intentId"] == self.last_intent:
+                self.mutation_seen = True
+                self.placed = True
+                log(f"   accepted: '{pkt['name']}' at {pkt['x']},{pkt['y']} "
+                    f"(seq {pkt['seq']}, depth {pkt['depth']}) - "
+                    f"the spot we asked for ({self.last_spot}) was land")
         elif name in ("REJECT", "BYE"):
             log("peer ended the session")
             raise SystemExit(0)
@@ -516,24 +555,34 @@ class Peer:
             y = by + (0 if t < 10 else (t - 10) if t < 20 else 10 if t < 30 else (40 - t))
             self.px, self.py = x, y
             self.send(pos(x, y, angle=0, facing=1, sprite=-1, image=0, room=self.room))
-        # ask the host to build something, once
+        # ask the host to build something, once - retrying other spots if the host
+        # says the one we picked is water, so a run shows the refusal *and* a build
         if self.place_due and not self.placed and now >= self.place_due:
-            self.placed = True
             name = self.choose_structure()
             if name is None:
                 log("!! the host sent no structure table; cannot request a build")
+                self.placed = True
                 return
-            # put it a little to the right of the game's player - near enough for
-            # the host's range check, far enough to be an obvious new object
             if self.player is not None:
                 px, py = self.player
             else:
                 px, py = self.px, self.py
-            tx, ty = (px + 128, py)
+            if not self.place_spots:
+                # A ring of offsets around the game's player: the first is the one we
+                # used before (a little to the right), then further out in each
+                # direction, so a pond or a shoreline is stepped over instead of
+                # ending the test. All stay inside the host's 448 px range check.
+                self.place_spots = [(128, 0), (-128, 0), (0, 128), (0, -128),
+                                    (192, 96), (-192, 96), (192, -96), (-192, -96),
+                                    (256, 0), (0, 256)]
+            dx, dy = self.place_spots[self.place_try % len(self.place_spots)]
+            tx, ty = (px + dx, py + dy)
             room = self.room if self.room else 8
             self.last_intent = (intent_id := random.randint(1, 0xFFFF))
+            self.last_spot = (tx, ty)
             log(f"-> INTENT_PLACE '{name}' at {tx},{ty} (room {room}, "
-                f"#{intent_id}); our puppet is at {self.px},{self.py}")
+                f"#{intent_id}, spot {self.place_try + 1}/{len(self.place_spots)}); "
+                f"our puppet is at {self.px},{self.py}")
             self.send(intent_place(intent_id, room, tx, ty, name))
 
 
@@ -609,11 +658,55 @@ def run_selftest() -> int:
     if framed[:12] != struct.pack("<III", HANDSHAKE_PRE, 12, len(framed) - 12):
         failures.append("frame(): wrong header")
 
+    # the place-retry state machine: a water refusal must re-arm the next spot, an
+    # accepted mutation must stop it. This is the offline half of the spot-check
+    # test the game supplies the other half of.
+    a, b = socket.socketpair()
+    try:
+        peer = Peer(a, is_host=False)
+        peer.handshaken = True
+        peer.player = (600, 600)
+        peer.place_wanted = "forge"
+        sent: list[dict] = []
+        peer.send = lambda payload: sent.append(parse_one(payload)[0])  # type: ignore[assignment]
+        peer.place_due = time.time() - 1.0
+        peer.tick()                       # asks at spot 1 (a POS packet comes first)
+        intents = [p for p in sent if p["name"] == "INTENT_PLACE"]
+        if not intents:
+            failures.append(f"retry: first tick sent no intent ({[p['name'] for p in sent]})")
+        else:
+            first = intents[-1]
+            peer.handle_payload(bytes([INTENT_REJECTED])
+                                + struct.pack("<I", first["intentId"])
+                                + p_str("that spot is on water"))
+            if peer.place_try != 1:
+                failures.append(f"retry: water refusal left place_try {peer.place_try}")
+            if peer.placed:
+                failures.append("retry: water refusal stopped the walk instead of retrying")
+            peer.place_due = time.time() - 1.0
+            peer.tick()                   # asks at spot 2
+            intents = [p for p in sent if p["name"] == "INTENT_PLACE"]
+            if len(intents) < 2:
+                failures.append("retry: second tick did not ask again")
+            elif (intents[-1]["x"], intents[-1]["y"]) == (first["x"], first["y"]):
+                failures.append("retry: asked the same spot twice")
+            else:
+                second = intents[-1]
+                peer.handle_payload(bytes([MUTATION_PLACE])
+                                    + struct.pack("<IIB", 7, second["intentId"], 8)
+                                    + struct.pack("<iii", second["x"], second["y"], -second["y"])
+                                    + p_str("forge"))
+                if not peer.placed or not peer.mutation_seen:
+                    failures.append("retry: an accepted mutation did not settle the walk")
+    finally:
+        a.close()
+        b.close()
+
     if failures:
         for f in failures:
             log(f"FAIL {f}")
         return 1
-    log(f"selftest: {len(cases) + 4} packets encode/parse correctly")
+    log(f"selftest: {len(cases) + 4} packets encode/parse correctly, spot-retry ok")
     return 0
 
 

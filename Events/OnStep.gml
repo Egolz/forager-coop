@@ -8,6 +8,7 @@ if (keyboard_check_pressed(vk_f6)) CoopJoin();
 if (keyboard_check_pressed(vk_f7)) CoopDisconnect("requested");
 if (keyboard_check_pressed(vk_f8)) CoopStatus();
 if (keyboard_check_pressed(vk_f9)) CoopDumpStructures();
+if (keyboard_check_pressed(vk_f10)) CoopProbeWorld();
 
 if (!global.coopPeerAlive) exit;
 

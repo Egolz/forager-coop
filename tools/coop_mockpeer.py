@@ -265,6 +265,7 @@ class Peer:
         self.last_ping = 0.0
         self.room = 0               # room learned from the game's POS packets
         self.player = None          # last position the game reported
+        self.pos_logged = None      # last position we bothered to print
         self.px, self.py = 620, 620 # where our own puppet currently is
         self.structs: list[tuple[int, str]] = []
         self.place_wanted = place   # None = auto, "" = do not ask
@@ -364,8 +365,12 @@ class Peer:
         pkt, used = parse_one(payload)
         if pkt is None:
             return
-        log(f"<- {describe(pkt)}")
         name = pkt["name"]
+        # POS is the only packet worth filtering: the host streams it ~20x a
+        # second and its animation frame changes every tick. It is logged below,
+        # but only when the position actually moves.
+        if name != "POS":
+            log(f"<- {describe(pkt)}")
 
         if name == "HELLO" and self.is_host:
             if pkt["protocol"] != PROTOCOL:
@@ -400,6 +405,14 @@ class Peer:
         elif name == "POS":
             self.room = pkt["room"]          # mirror the game's room back to it
             self.player = (pkt["x"], pkt["y"])
+            # The host streams this ~20 times a second (the animation frame
+            # changes every tick), so log only real movement - otherwise a live
+            # log is one long wall of identical lines and the interesting packet
+            # that follows is impossible to find.
+            if self.player != self.pos_logged:
+                self.pos_logged = self.player
+                log(f"   pos {pkt['x']},{pkt['y']} room {pkt['room']}"
+                    + f" facing {pkt['facing']}")
         elif name in ("REJECT", "BYE"):
             log("peer ended the session")
             raise SystemExit(0)

@@ -317,17 +317,152 @@ for (var _st_i = 0; _st_i < _st_n; _st_i++) {
 CoopSend(_st_b);
 
 #define CoopDumpStructures()
+// F9. Is the object our table calls a structure really one? `isStruct` asks the
+// game itself (object_is_ancestor against its own parStructure), which is the
+// only answer that counts - a table of plausible-looking object names proves
+// nothing.
 if (array_length(global.coopStructNames) == 0) CoopBuildStructDb();
 Trace("--- Co-op: structure database (" + string(array_length(global.coopStructNames)) + " entries) ---");
-var _ds_n = array_length(global.coopStructNames);
-if (_ds_n > 24) _ds_n = 24;
+var _ds_par = asset_get_index("parStructure");
+var _ds_n   = array_length(global.coopStructNames);
 for (var _ds_i = 0; _ds_i < _ds_n; _ds_i++) {
     var _ds_obj = global.coopStructObjects[_ds_i];
+    var _ds_txt = "?";
+    var _ds_anc = "-";
+    if (_ds_obj >= 0) {
+        _ds_txt = object_get_name(_ds_obj);
+        _ds_anc = "0";
+        if (_ds_par >= 0 && object_is_ancestor(_ds_obj, _ds_par)) _ds_anc = "1";
+    }
     Trace("#" + string(_ds_i) + "  " + global.coopStructNames[_ds_i]
-          + "  (" + (_ds_obj >= 0 ? object_get_name(_ds_obj) : "?") + ")");
+          + "  (" + _ds_txt + " isStruct=" + _ds_anc + ")");
 }
-if (_ds_n < array_length(global.coopStructNames)) Trace("... first " + string(_ds_n) + " only");
 Trace("---");
+
+#define CoopProbeWorld()
+// F10. Read-only. Dumps what the game thinks a structure is next to what our
+// table thinks, then writes it to coop_probe.ini in the game's own data folder
+// (next to error.log) - a console screenshot cannot be trusted for a table this
+// size, and the OCR of the first one already garbled every digit.
+//
+// The console gets the short half: the world, and the room's player. The file
+// gets that plus the whole 64-entry id -> object table.
+//
+// The parStructure half is the ground truth - the game's own parent object for
+// every building, whatever our table believes. The other half walks our own
+// id -> object map and prints any instance it finds, with the fields that decide
+// whether a player would actually see it (depth, image_index, visible).
+if (array_length(global.coopStructNames) == 0) CoopBuildStructDb();
+
+var _pw_lines = [];
+var _pw_par   = asset_get_index("parStructure");
+array_push(_pw_lines, "version " + global.coopVersion + " protocol " + string(global.coopProtocol));
+if (instance_exists(objPlayer)) {
+    array_push(_pw_lines, "room " + string(objPlayer.room) + " player "
+               + string(floor(objPlayer.x)) + "," + string(floor(objPlayer.y))
+               + " depth " + string(objPlayer.depth)
+               + " obj " + object_get_name(objPlayer.object_index));
+} else {
+    array_push(_pw_lines, "no player instance - the host is not in a world");
+}
+if (_pw_par < 0) {
+    array_push(_pw_lines, "parStructure: not found in this build");
+} else {
+    array_push(_pw_lines, "parStructure #" + string(_pw_par) + " name " + object_get_name(_pw_par)
+               + ": instance_number " + string(instance_number(_pw_par))
+               + ", TrueInstanceNumber " + string(TrueInstanceNumber(_pw_par)));
+}
+
+var _pw_alt = asset_get_index("objNewBuilding");
+if (_pw_alt >= 0) {
+    array_push(_pw_lines, "objNewBuilding #" + string(_pw_alt)
+               + " instances " + string(instance_number(_pw_alt)));
+}
+var _pw_alt2 = asset_get_index("objModStructure");
+if (_pw_alt2 >= 0) {
+    array_push(_pw_lines, "objModStructure #" + string(_pw_alt2)
+               + " instances " + string(instance_number(_pw_alt2)));
+}
+
+if (_pw_par >= 0) {
+    var _pw_pn = instance_number(_pw_par);
+    var _pw_pl = _pw_pn;
+    if (_pw_pl > 24) _pw_pl = 24;
+    array_push(_pw_lines, "parStructure instances (first " + string(_pw_pl) + "):");
+    for (var _pw_pi = 0; _pw_pi < _pw_pl; _pw_pi++) {
+        var _pw_p = instance_find(_pw_par, _pw_pi);
+        array_push(_pw_lines, " par " + object_get_name(_pw_p.object_index)
+                   + " " + string(floor(_pw_p.x)) + "," + string(floor(_pw_p.y))
+                   + " depth " + string(_pw_p.depth)
+                   + " image " + string(_pw_p.image_index)
+                   + " visible " + string(_pw_p.visible));
+    }
+}
+
+var _pw_hits = 0;
+var _pw_kind = array_length(global.coopStructObjects);
+for (var _pw_i = 0; _pw_i < _pw_kind; _pw_i++) {
+    var _pw_obj = global.coopStructObjects[_pw_i];
+    if (_pw_obj < 0) continue;
+    var _pw_c = TrueInstanceNumber(_pw_obj);
+    if (_pw_c <= 0) continue;
+    _pw_hits += 1;
+    var _pw_anc = "0";
+    if (_pw_par >= 0 && object_is_ancestor(_pw_obj, _pw_par)) _pw_anc = "1";
+    array_push(_pw_lines, "table #" + string(_pw_i) + " '" + global.coopStructNames[_pw_i]
+               + "' obj " + object_get_name(_pw_obj) + " isStruct=" + _pw_anc
+               + " count=" + string(_pw_c));
+    for (var _pw_j = 0; _pw_j < _pw_c; _pw_j++) {
+        var _pw_inst = TrueInstanceFind(_pw_obj, _pw_j);
+        array_push(_pw_lines, "    " + object_get_name(_pw_inst.object_index)
+                   + " " + string(floor(_pw_inst.x)) + "," + string(floor(_pw_inst.y))
+                   + " depth " + string(_pw_inst.depth)
+                   + " image " + string(_pw_inst.image_index)
+                   + " visible " + string(_pw_inst.visible));
+    }
+}
+array_push(_pw_lines, "our table matched " + string(_pw_hits) + " kinds in this room");
+
+// The whole id -> object table, file only: 64 console lines would bury the part
+// that matters, and the file is the copy we can actually read.
+var _pw_tbl = [];
+for (var _pw_ti = 0; _pw_ti < _pw_kind; _pw_ti++) {
+    var _pw_tobj = global.coopStructObjects[_pw_ti];
+    var _pw_txt  = "?";
+    var _pw_tanc = "-";
+    var _pw_ptxt = "-";
+    if (_pw_tobj >= 0) {
+        _pw_txt = object_get_name(_pw_tobj);
+        _pw_tanc = "0";
+        if (_pw_par >= 0 && object_is_ancestor(_pw_tobj, _pw_par)) _pw_tanc = "1";
+        var _pw_par2 = object_get_parent(_pw_tobj);
+        _pw_ptxt = "none";
+        if (_pw_par2 >= 0) _pw_ptxt = object_get_name(_pw_par2);
+    }
+    array_push(_pw_tbl, "tbl #" + string(_pw_ti) + " '" + global.coopStructNames[_pw_ti]
+               + "' obj " + _pw_txt + " parent " + _pw_ptxt + " isStruct=" + _pw_tanc);
+}
+
+Trace("--- Co-op probe ---");
+var _pw_n = array_length(_pw_lines);
+for (var _pw_k = 0; _pw_k < _pw_n; _pw_k++) Trace("  " + array_get(_pw_lines, _pw_k));
+Trace("---");
+
+// The file, so a long dump survives a screenshot. Printed to the console first:
+// if opening the file fails, the console still has everything.
+ini_open("coop_probe.ini");
+for (var _pw_w = 0; _pw_w < _pw_n; _pw_w++) {
+    ini_write_string("probe", "line" + string(_pw_w), array_get(_pw_lines, _pw_w));
+}
+ini_write_real("probe", "count", _pw_n);
+var _pw_tn = array_length(_pw_tbl);
+for (var _pw_tw = 0; _pw_tw < _pw_tn; _pw_tw++) {
+    ini_write_string("table", "tbl" + string(_pw_tw), array_get(_pw_tbl, _pw_tw));
+}
+ini_write_real("table", "count", _pw_tn);
+ini_close();
+Trace("Co-op: probe written to coop_probe.ini ("
+      + string(_pw_n) + " world + " + string(_pw_tn) + " table lines).");
 
 #define CoopStatus()
 Trace("--- Co-op status ---");

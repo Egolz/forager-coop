@@ -94,11 +94,23 @@ Notes:
   it has the same database locally — but it is also a divergence check (the mod compares
   the names and warns if the two installs disagree), and it is what lets a non-GML peer
   like `tools/coop_mockpeer.py` ask for a valid structure by name.
+  The list is **pruned**: the database this build ships has 92 rows, but only the ones with
+  a non-empty name go out. The rows without a name cannot be addressed on a name-keyed wire,
+  and the build-menu **category headers** are rows too (`"для промышленности"`, object
+  `objEmpty`) — an earlier 64-entry cap hid part of the table and the client's automatic
+  choice landed on a header, so the host dutifully created an `objEmpty` and nothing
+  appeared in the world (live, 2026-10-20). The mock now skips the headers when it picks.
+- `MUTATION_PLACE.depth` is informational. Forager y-sorts the world: an instance sits at
+  `depth = -y` (probe, 2026-10-20: the player at y=656 had depth -656, and so did a
+  hand-built furnace). The host's `OnStructureSpawn()` fires *before* the game sets that
+  depth, so the field went out as 0 for an instance that settled at -656. The receiver
+  therefore recomputes the depth from `y` rather than trusting the field; it is carried for
+  logs and for a future non-GML peer.
 
 Notes:
 
 - **Version check.** The host refuses a peer whose `protocol` differs (it replies `REJECT`
-  and drops the socket). Protocol `3`, mod version `0.0.4-m2b` at the time of writing.
+  and drops the socket). Protocol `3`, mod version `0.0.5-m2c` at the time of writing.
   (`3` adds `DEBUG_LINE`; `2` added the world-sync packets; `1` was presence only.)
 - **Ping/pong.** One ping in flight at a time, every 90 steps (≈1.5 s at 60 fps). A ping
   that is not answered within 5 s marks the peer as gone. `PONG` echoes the nonce back.

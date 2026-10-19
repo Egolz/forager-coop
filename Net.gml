@@ -192,6 +192,15 @@ return -1;
 if (_id >= 0 && _id < array_length(global.coopStructObjects)) return global.coopStructObjects[_id];
 return -1;
 
+#define CoopStructDepth(_y)
+// Forager y-sorts the world: an instance's depth is its negated y. The F10 probe
+// (2026-10-20) found the player at y=656, depth -656, and a hand-built furnace at
+// y=656, depth -656. instance_create_depth() with depth 0 therefore drops a
+// peer's structure onto the wrong layer, so we compute the game's own value
+// instead of guessing. Depth is a pure function of y, so both ends agree
+// without carrying it on the wire.
+return -floor(_y);
+
 #define CoopStructureNameOf(_struc, _obj)
 // The name of the structure an instance belongs to. OnStructureSpawn() hands us
 // a structure id; if that id is not one we cached, fall back to the object.
@@ -321,15 +330,27 @@ buffer_write(_ir_b, buffer_string, _why);
 CoopSend(_ir_b);
 
 #define CoopSendStructureTable()
+// The peer's build menu, as id/name pairs. Ids stay indices into the full
+// database (CoopFindStructure on the far end searches its own, identical one);
+// only the *list* is pruned, so a peer never asks for something unnameable.
+// This database has 92 entries in this build, not the 64 an earlier cap assumed
+// (F10 probe, 2026-10-20), and its tail carries entries with an empty name
+// (#68..#80) that a name-keyed wire cannot address at all.
 if (array_length(global.coopStructNames) == 0) CoopBuildStructDb();
-var _st_n = array_length(global.coopStructNames);
-if (_st_n > 64) _st_n = 64;
+var _st_ids = [];
+var _st_n   = array_length(global.coopStructNames);
+for (var _st_i = 0; _st_i < _st_n; _st_i++) {
+    if (global.coopStructNames[_st_i] == "") continue;
+    array_push(_st_ids, _st_i);
+}
+var _st_c = array_length(_st_ids);
 var _st_b = buffer_create(256, buffer_grow, 1);
 buffer_write(_st_b, buffer_u8, CoopCmd.STRUCTURE_TABLE);
-buffer_write(_st_b, buffer_u16, _st_n);
-for (var _st_i = 0; _st_i < _st_n; _st_i++) {
-    buffer_write(_st_b, buffer_u16, _st_i);
-    buffer_write(_st_b, buffer_string, global.coopStructNames[_st_i]);
+buffer_write(_st_b, buffer_u16, _st_c);
+for (var _st_j = 0; _st_j < _st_c; _st_j++) {
+    var _st_k = array_get(_st_ids, _st_j);
+    buffer_write(_st_b, buffer_u16, _st_k);
+    buffer_write(_st_b, buffer_string, global.coopStructNames[_st_k]);
 }
 CoopSend(_st_b);
 
@@ -602,7 +623,7 @@ switch (_cmd) {
             }
         }
 
-        var _placed = CoopCreateStructure(_sid, _ix, _iy, 0);
+        var _placed = CoopCreateStructure(_sid, _ix, _iy, CoopStructDepth(_iy));
         if (_placed < 0) {
             CoopSendIntentRejected(_iid, "the host could not create it");
             break;
@@ -638,7 +659,11 @@ switch (_cmd) {
             Trace("Co-op: mutation names an unknown structure '" + _mname + "' - ignored.");
             break;
         }
-        CoopCreateStructure(_msid, _mx, _my, _mdep);
+        // Depth is recomputed rather than taken from the wire: the host's
+        // OnStructureSpawn() fires before the game sets a depth (the mutation
+        // went out with 0 for an instance that really sat at -656), and depth is
+        // a pure function of y anyway, so both ends derive the same value.
+        CoopCreateStructure(_msid, _mx, _my, CoopStructDepth(_my));
         Trace("Co-op: <- mutation seq " + string(_seq) + " '" + _mname + "' at "
               + string(_mx) + "," + string(_my) + ".");
         break;

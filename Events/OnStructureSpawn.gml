@@ -21,7 +21,10 @@ if (_name == "") {
 }
 
 if (global.coopIsHost) {
-    CoopSendMutationPlace(0, i.x, i.y, i.depth, _name);
+    // i.depth is not the game's depth yet - OnStructureSpawn() runs before the
+    // instance is y-sorted (a furnace at y=656 announced depth 0 and settled at
+    // -656). Send the game's own value, -y.
+    CoopSendMutationPlace(0, i.x, i.y, CoopStructDepth(i.y), _name);
     Trace("Co-op: announced '" + _name + "' at " + string(floor(i.x)) + ","
           + string(floor(i.y)) + " as seq " + string(global.coopSeq) + ".");
 } else {

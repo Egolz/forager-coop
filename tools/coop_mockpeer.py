@@ -301,7 +301,7 @@ class Peer:
     """One connection; performs the GM handshake, then the mod handshake."""
 
     def __init__(self, sock: socket.socket, is_host: bool,
-                 place: str | None = None):
+                 place: str | None = None, place_index: int | None = None):
         self.sock = sock
         self.is_host = is_host      # True when we are the GameMaker server side
         self.buf = b""
@@ -316,6 +316,7 @@ class Peer:
         self.px, self.py = 620, 620 # where our own puppet currently is
         self.structs: list[tuple[int, str]] = []
         self.place_wanted = place   # None = auto, "" = do not ask
+        self.place_index = place_index  # ask for this id from the host's table
         self.placed = False
         self.place_due = 0.0
         self.sock.settimeout(0.2)
@@ -475,10 +476,26 @@ class Peer:
     def choose_structure(self) -> str | None:
         if self.place_wanted:
             return self.place_wanted
+        if self.place_index is not None:
+            for sid, name in self.structs:
+                if sid == self.place_index:
+                    return name
+            log(f"!! the host's table has no structure #{self.place_index}")
+            return None
         known = {n.lower() for _, n in self.structs}
         for want in PREFERRED_STRUCTURES:
             if want in known:
                 return want
+        # Nothing matched by English name (we are on a localized install), so take
+        # the first entry a player could actually build. The structure database
+        # also stores the build-menu category headers as rows - "для
+        # промышленности" and friends, whose object is the objEmpty placeholder -
+        # and asking the host to build one creates nothing at all (live run
+        # 2026-10-20). The prefix test is a test-tool heuristic, not wire logic.
+        for _sid, name in self.structs:
+            if not name or name.startswith("для"):
+                continue
+            return name
         return self.structs[0][1] if self.structs else None
 
     def tick(self) -> None:
@@ -601,7 +618,7 @@ def run_selftest() -> int:
 
 
 def run_client(host: str, port: int, place: str | None, wait: float = 0.0,
-               run_for: float = 0.0) -> int:
+               run_for: float = 0.0, place_index: int | None = None) -> int:
     """Talk to the game's host, and dial again whenever the game goes away.
 
     The owner's game comes and goes - a restart, a crash, a recompile - and a peer
@@ -636,7 +653,7 @@ def run_client(host: str, port: int, place: str | None, wait: float = 0.0,
                 time.sleep(1.0)
         log("connected")
         reset_debug_file()
-        code = _session(s, place, stop_at, run_for)
+        code = _session(s, place, stop_at, run_for, place_index)
         if code is None:                 # time budget ran out inside the session
             return 0
         if code != 0:                    # a protocol mistake - do not loop on it
@@ -649,9 +666,9 @@ def run_client(host: str, port: int, place: str | None, wait: float = 0.0,
 
 
 def _session(s: socket.socket, place: str | None, stop_at: float | None,
-             run_for: float) -> int | None:
+             run_for: float, place_index: int | None = None) -> int | None:
     """One connection to the host. None = the time budget ran out, else the exit code."""
-    peer = Peer(s, is_host=False, place=place)
+    peer = Peer(s, is_host=False, place=place, place_index=place_index)
 
     def timeup() -> bool:
         return stop_at is not None and time.time() >= stop_at
@@ -742,6 +759,9 @@ def main() -> int:
                     help="structure name to ask the host for (auto if omitted)")
     ap.add_argument("--no-place", action="store_true",
                     help="do not request a structure at all")
+    ap.add_argument("--place-index", type=int, default=None,
+                    help="client mode: ask for the structure with this id "
+                         "from the host's table (test aid)")
     ap.add_argument("--wait", type=float, default=0.0,
                     help="client mode: keep retrying the connection for this many seconds")
     ap.add_argument("--for", dest="run_for", type=float, default=0.0,
@@ -752,7 +772,8 @@ def main() -> int:
         if args.mode == "selftest":
             return run_selftest()
         if args.mode == "client":
-            return run_client(args.host, args.port, place, args.wait, args.run_for)
+            return run_client(args.host, args.port, place, args.wait, args.run_for,
+                              args.place_index)
         elif args.mode == "probe":
             run_probe(args.host, args.port, settle=4.0)
         else:

@@ -499,11 +499,12 @@ class Peer:
                     return
                 self.place_try += 1
                 if self.place_try < len(self.place_spots):
-                    self.place_due = time.time() + 0.5   # ask again elsewhere
+                    self.place_due = time.time() + 0.2   # ask again elsewhere
                     log(f"   retrying at another spot (refused at {self.last_spot})")
                 else:
                     self.placed = True
-                    log("!! every candidate spot was refused - the ring is all water or occupied")
+                    log(f"!! every candidate spot in the {len(self.place_spots)}-cell spiral "
+                        f"was refused (all water or occupied) - no free ground near the player")
         elif name == "MUTATION_PLACE":
             # A confirmed placement. If it is the answer to our own intent, that spot
             # was free - the positive half of the spot check. A second round then asks
@@ -588,19 +589,21 @@ class Peer:
             else:
                 px, py = self.px, self.py
             if not self.place_spots:
-                # Offsets around the game's player. The first is *on* the player, so
-                # if the owner stands beside a tree or a rock the very first request
-                # lands in that occupied cell and the new rule is what answers it;
-                # the rest ring outward, so a pond, a shoreline or a tree is stepped
-                # over instead of ending the test. All stay inside the host's 448 px
-                # range check. Two obstacles can refuse a spot now - water and
-                # occupancy - so the ring is denser than the water-only version was.
-                self.place_spots = [(0, 0), (16, 0), (0, 16), (-16, 0), (0, -16),
-                                    (128, 0), (-128, 0), (0, 128), (0, -128),
-                                    (192, 96), (-192, 96), (192, -96), (-192, -96),
-                                    (256, 0), (0, 256), (256, 128), (-256, 128),
-                                    (256, -128), (-256, -128), (128, 192), (-128, 192),
-                                    (128, -192), (-128, -192), (320, 0), (0, 320)]
+                # Offsets around the game's player, on a 16 px grid (the build-cell
+                # size) out to 8 cells, walking outward in a spiral. A sparse fixed
+                # ring reaches 320 px and can miss every legal cell when the owner
+                # stands on a small island - which is exactly what happened live
+                # 2026-10-20 at 03:41, where all 25 ring spots were water or a tree
+                # and the mock had nowhere legal to ask. A dense spiral stays on the
+                # land the owner is actually standing on. The first entries sit on and
+                # right beside the player, so an occupied cell is hit immediately.
+                self.place_spots = []
+                for _ring in range(0, 7):
+                    for _gx in range(-_ring, _ring + 1):
+                        for _gy in range(-_ring, _ring + 1):
+                            if max(abs(_gx), abs(_gy)) != _ring:
+                                continue
+                            self.place_spots.append((_gx * 16, _gy * 16))
             dx, dy = self.place_spots[self.place_try % len(self.place_spots)]
             if self.place_abs is not None:
                 tx, ty = self.place_abs            # round 2: an exact cell, not an offset

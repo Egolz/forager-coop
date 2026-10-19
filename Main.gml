@@ -30,13 +30,14 @@ enum CoopCmd {
     DEBUG_LINE       = 12   // either way: one line of the sender's console
 }
 
-global.coopVersion  = "0.0.10-m2h";
+global.coopVersion  = "0.0.11-m2i";
 global.coopProtocol = 3;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console
 global.coopPort     = 6511;
 global.coopPlaceRange = 448;   // see Net.gml: how far a client may place from itself
 global.coopSolidRadius = 24;   // see Net.gml: how close counts as the same build-cell
 global.coopSolidObj    = -2;   // -2 = not resolved yet, -1 = no parSolid in this build
+global.coopLivingObjs  = [];   // player/NPC/enemy/pet object indices, resolved lazily
 
 global.coopIsHost    = false;  // we own the listening server
 global.coopConnected = false;  // a peer socket is up

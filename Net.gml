@@ -210,24 +210,52 @@ return -1;
 return -floor(_y);
 
 #define CoopSolidNear(_x, _y)
-// How many "solid" things share the build-cell of (_x,_y)? parSolid is the one
-// ancestor that every tree, rock, bush *and* built structure descends from - the
-// live F12 probe (2026-10-20) walked the chains:
-//     objFurnace -> objFurnace parStructure parObject parSolid
-//     objTree    -> objTree    parNatural   parObject parSolid
-//     objRock    -> objRock    parNatural   parObject parSolid
-// so a single rule against parSolid covers all of them; parStructure alone would
-// miss trees and rocks, and it also has no instances of its own (the game keeps a
-// furnace under objFurnace). Only calls already proven live are used here
-// (asset_get_index, instance_number, instance_find, point_distance) - no collision
-// builtin, which is exactly what keeps this honest before one is tested.
+// How many things share the build-cell of (_x,_y) in a way that makes it
+// unbuildable? Two groups, because they are not the same tree:
+//
+//  * parSolid - the one ancestor every tree, rock, bush *and* built structure
+//    descends from. The live F12 probe (2026-10-20) walked the chains:
+//        objFurnace -> objFurnace parStructure parObject parSolid
+//        objTree    -> objTree    parNatural   parObject parSolid
+//        objRock    -> objRock    parNatural   parObject parSolid
+//    so one rule covers all of them; parStructure alone would miss trees and rocks,
+//    and it has no instances of its own anyway (the game keeps a furnace under
+//    objFurnace).
+//
+//  * Living things - the player and any NPC, enemy or pet. A player cannot build on
+//    themselves or on another character, and parSolid does not cover them: the first
+//    live run of this test (2026-10-20, 03:47) placed a furnace exactly under the
+//    host at offset (0,0) and was accepted, which the owner caught at once. The
+//    names below are resolved once and skipped when this build does not have them,
+//    so a rename costs a missing guard and never a failed COMPILE.
+//
+// Only calls already proven live are used (asset_get_index, instance_number,
+// instance_find, point_distance) - no collision builtin, which is what keeps this
+// honest before one is tested.
 if (global.coopSolidObj == -2) global.coopSolidObj = asset_get_index("parSolid");
-if (global.coopSolidObj < 0) return 0;
+if (global.coopLivingObjs == undefined) global.coopLivingObjs = [];
+if (array_length(global.coopLivingObjs) == 0) {
+    var _sld_names = ["objPlayer", "parNPC", "parEnemy", "objPet"];
+    for (var _sld_ni = 0; _sld_ni < array_length(_sld_names); _sld_ni++) {
+        var _sld_oi = asset_get_index(array_get(_sld_names, _sld_ni));
+        if (_sld_oi >= 0) array_push(global.coopLivingObjs, _sld_oi);
+    }
+}
 var _sld_hits = 0;
-var _sld_n = instance_number(global.coopSolidObj);
-for (var _sld_i = 0; _sld_i < _sld_n; _sld_i++) {
-    var _sld_inst = instance_find(global.coopSolidObj, _sld_i);
-    if (point_distance(_sld_inst.x, _sld_inst.y, _x, _y) <= global.coopSolidRadius) _sld_hits += 1;
+if (global.coopSolidObj >= 0) {
+    var _sld_n = instance_number(global.coopSolidObj);
+    for (var _sld_i = 0; _sld_i < _sld_n; _sld_i++) {
+        var _sld_inst = instance_find(global.coopSolidObj, _sld_i);
+        if (point_distance(_sld_inst.x, _sld_inst.y, _x, _y) <= global.coopSolidRadius) _sld_hits += 1;
+    }
+}
+for (var _sld_li = 0; _sld_li < array_length(global.coopLivingObjs); _sld_li++) {
+    var _sld_lobj = array_get(global.coopLivingObjs, _sld_li);
+    var _sld_ln = instance_number(_sld_lobj);
+    for (var _sld_lj = 0; _sld_lj < _sld_ln; _sld_lj++) {
+        var _sld_linst = instance_find(_sld_lobj, _sld_lj);
+        if (point_distance(_sld_linst.x, _sld_linst.y, _x, _y) <= global.coopSolidRadius) _sld_hits += 1;
+    }
 }
 return _sld_hits;
 
@@ -676,7 +704,8 @@ array_push(_ps_lines, "player " + string(_ps_px) + "," + string(_ps_py)
 // whether a *structure* (objFurnace) also descends from it, or from a separate
 // branch, so the chain below is dumped rather than assumed.
 var _ps_pars = ["parStructure", "parResource", "parSolid", "objTile",
-                "objTree", "objRock", "objBush", "objCactus"];
+                "objTree", "objRock", "objBush", "objCactus",
+                "objPlayer", "parNPC", "parEnemy", "parEntity", "objPet"];
 var _ps_found = [];
 for (var _ps_pi = 0; _ps_pi < array_length(_ps_pars); _ps_pi++) {
     var _ps_pname = array_get(_ps_pars, _ps_pi);
@@ -695,7 +724,8 @@ for (var _ps_pi = 0; _ps_pi < array_length(_ps_pars); _ps_pi++) {
 //    it answers the one question the check's shape depends on: does a built
 //    structure share an ancestor with a tree and a rock? If yes, one rule covers
 //    all three; if no, the host needs a second rule.
-var _ps_chainof = ["objFurnace", "objTree", "objRock", "parSolid", "parStructure"];
+var _ps_chainof = ["objFurnace", "objTree", "objRock", "parSolid", "parStructure",
+                   "objPlayer", "parNPC", "parEnemy", "parEntity", "objPet"];
 for (var _ps_ci = 0; _ps_ci < array_length(_ps_chainof); _ps_ci++) {
     var _ps_cname = array_get(_ps_chainof, _ps_ci);
     var _ps_cobj  = asset_get_index(_ps_cname);

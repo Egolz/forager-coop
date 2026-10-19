@@ -603,6 +603,8 @@ class Peer:
                         for _gy in range(-_ring, _ring + 1):
                             if max(abs(_gx), abs(_gy)) != _ring:
                                 continue
+                            if _gx == 0 and _gy == 0:
+                                continue   # the player's own cell is not buildable
                             self.place_spots.append((_gx * 16, _gy * 16))
             dx, dy = self.place_spots[self.place_try % len(self.place_spots)]
             if self.place_abs is not None:

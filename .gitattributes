@@ -1,0 +1,12 @@
+* text=auto
+
+# the game's script editor and its Windows loader are happy with CRLF
+*.gml text eol=crlf
+*.ps1 text eol=crlf
+
+*.json text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+
+*.png binary
+*.ogg binary

@@ -1,0 +1,5 @@
+# nothing here is build output; the game compiles the .gml files itself
+*.log
+Thumbs.db
+.DS_Store
+__pycache__/

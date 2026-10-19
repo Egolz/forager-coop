@@ -505,6 +505,60 @@ if (global.coopSocket < 0) {
     Trace("Co-op: probe: no peer connected - the table half was dropped (only the lines above exist).");
 }
 
+#define CoopProbeApi()
+// F11. Can a mod ask the game where water is? This is the question the M2.1 test
+// raised: a client's intent is checked for who asked and how far, never for
+// whether the spot is legal, so the mock's furnace landed on open water.
+//
+// `WaterCollision(x, y)` is documented ("Checks for a water tile at the given
+// x/y"), but it is a **first-party API script**, not a builtin this build exports
+// to mod GML - a bare `WaterCollision(x, y)` resolves as "not function or script"
+// and takes the whole mod down. The documented way to reach a script is a
+// wrapper. Two spellings are plausible and each is reported separately, so one
+// COMPILE says which one this loader takes. Read-only; it creates nothing.
+//
+// The call itself is walled off in its own macro so that when one guess is wrong
+// the failure is one macro, and the F10 world probe keeps working.
+if (!instance_exists(objPlayer)) {
+    Trace("Co-op: F11 needs a loaded world.");
+    exit;
+}
+
+var _pa_px = floor(objPlayer.x);
+var _pa_py = floor(objPlayer.y);
+var _pa_lines = [];
+array_push(_pa_lines, "=== api probe begin " + global.coopVersion + " ===");
+array_push(_pa_lines, "player " + string(_pa_px) + "," + string(_pa_py));
+
+// 1) is the spot legal at all? WaterCollision(x, y) -> real/bool.
+//    Called by name through a wrapper, the documented path for any script.
+var _pa_wrap = ScriptWrap("WaterCollision");
+var _pa_here = ScriptCall(_pa_wrap, _pa_px, _pa_py);
+var _pa_up   = ScriptCall(_pa_wrap, _pa_px, _pa_py - 64);
+var _pa_side = ScriptCall(_pa_wrap, _pa_px + 128, _pa_py);
+array_push(_pa_lines, "WaterCollision at player  = " + string(_pa_here));
+array_push(_pa_lines, "WaterCollision 64 above   = " + string(_pa_up));
+array_push(_pa_lines, "WaterCollision 128 right  = " + string(_pa_side));
+
+// 2) the same script fetched by name from the first-party mod ("Forager").
+var _pa_fn = ModFunctionGet("Forager", "WaterCollision");
+if (_pa_fn == undefined) {
+    array_push(_pa_lines, "ModFunctionGet: Forager has no 'WaterCollision'");
+} else {
+    var _pa_m = ScriptCall(_pa_fn, _pa_px, _pa_py);
+    array_push(_pa_lines, "ModFunctionGet result     = " + string(_pa_m));
+}
+
+array_push(_pa_lines, "=== api probe end ===");
+
+var _pa_n = array_length(_pa_lines);
+Trace("--- Co-op api probe ---");
+for (var _pa_i = 0; _pa_i < _pa_n; _pa_i++) {
+    Trace("  " + array_get(_pa_lines, _pa_i));
+    CoopSendDebugLine(array_get(_pa_lines, _pa_i));
+}
+Trace("---");
+
 #define CoopStatus()
 Trace("--- Co-op status ---");
 Trace("version " + global.coopVersion + ", protocol " + string(global.coopProtocol)

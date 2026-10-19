@@ -9,7 +9,8 @@
 // the mod -> COMPILE). No external tool is required - proven by M0.
 //
 // Controls:  F5 = host   F6 = join   F7 = disconnect   F8 = status
-//            F9 = dump structures   F10 = probe the world (see Net.gml)
+//            F9 = dump structures   F10 = probe the world   F11 = probe the API
+//            (see Net.gml)
 // Console for Trace output: the `t` key.
 // ============================================================================
 
@@ -29,7 +30,7 @@ enum CoopCmd {
     DEBUG_LINE       = 12   // either way: one line of the sender's console
 }
 
-global.coopVersion  = "0.0.5-m2c";
+global.coopVersion  = "0.0.6-m2d";
 global.coopProtocol = 3;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console
 global.coopPort     = 6511;

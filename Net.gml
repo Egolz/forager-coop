@@ -21,6 +21,8 @@ global.coopPeerVersion = "";
 global.coopPingSentAt  = -1;
 global.coopPingMs      = -1;
 global.coopSocket      = -1;
+global.coopPending        = [];
+global.coopApplyingRemote = false;
 
 #define CoopHost()
 if (global.coopIsHost) { Trace("Co-op: already hosting."); exit; }
@@ -120,6 +122,200 @@ buffer_write(_b, buffer_u8, floor(objPlayer.image_index) mod 256);
 buffer_write(_b, buffer_u8, objPlayer.room);
 CoopSend(_b);
 
+// ---------------------------------------------------------------------------
+// M2: structures
+//
+// A structure is identified on the wire by its **name** (e.g. "forge"), not by
+// an object index: names are stable between builds and readable in a log.
+//
+// Note on the macros below: GML here is happy with the same `var` name in two
+// *different* blocks (PencilPal relies on that everywhere) but not twice inside
+// one block, so each macro uses its own prefix and none of them is expanded
+// twice within a single block.
+// ---------------------------------------------------------------------------
+
+#define COOP_PLACE_RANGE 448
+// A client may only place within this many pixels of its own puppet - a cheap
+// sanity/anti-grief check, not a real anti-cheat.
+
+#define CoopBuildStructDb()
+// Reads the game's structure database into global.coopStructNames/Objects
+// (id -> lowercase name / object index). Called once at load and again lazily,
+// because the database is not guaranteed to be up when the mod first loads.
+global.coopStructNames   = [];
+global.coopStructObjects = [];
+try {
+    var _bd_n = Structure.Count;
+    for (var _bd_i = 0; _bd_i < _bd_n; _bd_i++) {
+        global.coopStructNames[_bd_i]   = string_lower(StructureGet(_bd_i, StructureData.Name));
+        global.coopStructObjects[_bd_i] = StructureGet(_bd_i, StructureData.Object);
+    }
+    Trace("Co-op: structure database cached (" + string(_bd_n) + " entries).");
+} catch (_bd_err) {
+    Trace("Co-op: could not read the structure database: " + string(_bd_err));
+}
+
+#define CoopFindStructure(_name)
+// -> id of the structure called _name, or -1
+if (array_length(global.coopStructNames) == 0) CoopBuildStructDb();
+var _fl_want = string_lower(_name);
+var _fl_n    = array_length(global.coopStructNames);
+for (var _fl_i = 0; _fl_i < _fl_n; _fl_i++) {
+    if (global.coopStructNames[_fl_i] == _fl_want) return _fl_i;
+}
+return -1;
+
+#define CoopStructObject(_id)
+// -> the object index a structure id is built from, or -1
+if (_id >= 0 && _id < array_length(global.coopStructObjects)) return global.coopStructObjects[_id];
+return -1;
+
+#define CoopStructureNameOf(_struc, _obj)
+// The name of the structure an instance belongs to. OnStructureSpawn() hands us
+// a structure id; if that id is not one we cached, fall back to the object.
+if (_struc >= 0 && _struc < array_length(global.coopStructNames)) return global.coopStructNames[_struc];
+var _sno_n = array_length(global.coopStructObjects);
+for (var _sno_i = 0; _sno_i < _sno_n; _sno_i++) {
+    if (global.coopStructObjects[_sno_i] == _obj) return global.coopStructNames[_sno_i];
+}
+return "";
+
+#define CoopStructureAt(_obj, _x, _y)
+// -> an existing instance of _obj at (_x,_y), or -1. Uses the True Instance
+//    system, so instances culled offscreen are found too.
+var _at_res  = -1;
+var _at_n    = TrueInstanceNumber(_obj);
+for (var _at_i = 0; _at_i < _at_n; _at_i++) {
+    var _at_inst = TrueInstanceFind(_obj, _at_i);
+    if (floor(_at_inst.x) == floor(_x) && floor(_at_inst.y) == floor(_y)) {
+        _at_res = _at_inst;
+        break;
+    }
+}
+return _at_res;
+
+#define CoopCreateStructure(_sid, _x, _y, _depth)
+// -> the instance, or -1 on failure. Takes a structure **id** (run
+//    CoopFindStructure first). Never fires an intent/mutation back out:
+//    OnStructureSpawn() bails while coopApplyingRemote is set.
+var _cs_obj = CoopStructObject(_sid);
+if (_cs_obj < 0) return -1;
+
+var _cs_where = CoopStructureAt(_cs_obj, _x, _y);
+if (_cs_where >= 0) {
+    // already there - usually our own optimistic placement, so adopt it
+    if (variable_instance_exists(_cs_where, "structure")) _cs_where.structure = _sid;
+    return _cs_where;
+}
+
+global.coopApplyingRemote = true;
+var _cs_new = instance_create_depth(floor(_x), floor(_y), floor(_depth), _cs_obj);
+if (variable_instance_exists(_cs_new, "structure")) _cs_new.structure = _sid;
+global.coopApplyingRemote = false;
+return _cs_new;
+
+#define CoopForgetPending(_iid)
+var _fp_n = array_length(global.coopPending);
+for (var _fp_i = 0; _fp_i < _fp_n; _fp_i++) {
+    if (array_get(array_get(global.coopPending, _fp_i), 0) == _iid) {
+        array_delete(global.coopPending, _fp_i, 1);
+        break;
+    }
+}
+
+#define CoopUndoPrediction(_iid)
+// The host refused an intent we had already placed optimistically. The resource
+// cost is NOT refunded (inventories are M2.4) - see the README's known issues.
+// A pending entry is [_iid, x, y, sid, obj].
+var _up_n = array_length(global.coopPending);
+for (var _up_i = 0; _up_i < _up_n; _up_i++) {
+    var _up_p = array_get(global.coopPending, _up_i);
+    if (array_get(_up_p, 0) != _iid) continue;
+    var _up_obj = array_get(_up_p, 4);
+    if (_up_obj >= 0) {
+        var _up_tn = TrueInstanceNumber(_up_obj);
+        for (var _up_ti = 0; _up_ti < _up_tn; _up_ti++) {
+            var _up_inst = TrueInstanceFind(_up_obj, _up_ti);
+            if (floor(_up_inst.x) == array_get(_up_p, 1)
+                && floor(_up_inst.y) == array_get(_up_p, 2)) {
+                global.coopApplyingRemote = true;
+                instance_destroy(_up_inst, false);
+                global.coopApplyingRemote = false;
+                Trace("Co-op: rolled back our structure at "
+                      + string(array_get(_up_p, 1)) + "," + string(array_get(_up_p, 2)) + ".");
+                break;
+            }
+        }
+    }
+    array_delete(global.coopPending, _up_i, 1);
+    break;
+}
+
+#define CoopSendIntentPlace(_name, _x, _y)
+global.coopIntentCounter += 1;
+var _ip_iid = global.coopIntentCounter;
+var _ip_sid = CoopFindStructure(_name);
+array_push(global.coopPending, [_ip_iid, floor(_x), floor(_y), _ip_sid, CoopStructObject(_ip_sid)]);
+var _ip_b = buffer_create(96, buffer_grow, 1);
+buffer_write(_ip_b, buffer_u8, CoopCmd.INTENT_PLACE);
+buffer_write(_ip_b, buffer_u32, _ip_iid);
+buffer_write(_ip_b, buffer_u8, objPlayer.room);
+buffer_write(_ip_b, buffer_s32, floor(_x));
+buffer_write(_ip_b, buffer_s32, floor(_y));
+buffer_write(_ip_b, buffer_string, _name);
+CoopSend(_ip_b);
+Trace("Co-op: -> intent place '" + _name + "' at " + string(floor(_x)) + ","
+      + string(floor(_y)) + " (#" + string(_ip_iid) + ")");
+
+#define CoopSendMutationPlace(_intentId, _x, _y, _depth, _name)
+global.coopSeq += 1;
+var _mp_b = buffer_create(128, buffer_grow, 1);
+buffer_write(_mp_b, buffer_u8, CoopCmd.MUTATION_PLACE);
+buffer_write(_mp_b, buffer_u32, global.coopSeq);
+buffer_write(_mp_b, buffer_u32, _intentId);
+buffer_write(_mp_b, buffer_u8, objPlayer.room);
+buffer_write(_mp_b, buffer_s32, floor(_x));
+buffer_write(_mp_b, buffer_s32, floor(_y));
+buffer_write(_mp_b, buffer_s32, floor(_depth));
+buffer_write(_mp_b, buffer_string, _name);
+CoopSend(_mp_b);
+
+#define CoopSendIntentRejected(_intentId, _why)
+var _ir_b = buffer_create(160, buffer_grow, 1);
+buffer_write(_ir_b, buffer_u8, CoopCmd.INTENT_REJECTED);
+buffer_write(_ir_b, buffer_u32, _intentId);
+buffer_write(_ir_b, buffer_string, _why);
+CoopSend(_ir_b);
+
+#define CoopSendStructureTable()
+if (array_length(global.coopStructNames) == 0) CoopBuildStructDb();
+var _st_n = array_length(global.coopStructNames);
+if (_st_n > 64) _st_n = 64;
+var _st_b = buffer_create(256, buffer_grow, 1);
+buffer_write(_st_b, buffer_u8, CoopCmd.STRUCTURE_TABLE);
+buffer_write(_st_b, buffer_u16, _st_n);
+for (var _st_i = 0; _st_i < _st_n; _st_i++) {
+    buffer_write(_st_b, buffer_u16, _st_i);
+    buffer_write(_st_b, buffer_string, global.coopStructNames[_st_i]);
+}
+CoopSend(_st_b);
+
+#define CoopDumpStructures()
+Trace("--- Co-op: structure database (" + string(array_length(global.coopStructNames)) + " entries) ---");
+try {
+    var _ds_n = array_length(global.coopStructNames);
+    if (_ds_n > 24) _ds_n = 24;
+    for (var _ds_i = 0; _ds_i < _ds_n; _ds_i++) {
+        var _ds_obj = global.coopStructObjects[_ds_i];
+        Trace("#" + string(_ds_i) + "  " + global.coopStructNames[_ds_i]
+              + "  (" + (_ds_obj >= 0 ? object_get_name(_ds_obj) : "?") + ")");
+    }
+    if (_ds_n < array_length(global.coopStructNames)) Trace("... first " + string(_ds_n) + " only");
+} catch (_ds_err) {
+    Trace("Co-op: could not dump structures: " + string(_ds_err));
+}
+Trace("---");
+
 #define CoopStatus()
 Trace("--- Co-op status ---");
 Trace("version " + global.coopVersion + ", protocol " + string(global.coopProtocol)
@@ -133,6 +329,10 @@ if (global.coopPeerAlive) {
               + " room " + string(global.coopPeer.room));
     }
 }
+Trace("world: " + (global.coopIsHost ? "authority" : "follower")
+      + ", seq " + string(global.coopSeq)
+      + ", structures known " + string(array_length(global.coopStructNames))
+      + ", intents awaiting confirmation " + string(array_length(global.coopPending)));
 Trace("--------------------");
 
 #define CoopHandleData(_buf)
@@ -152,6 +352,8 @@ switch (_cmd) {
         global.coopPeerVersion = _v;
         global.coopPeerAlive   = true;
         CoopSendWelcome();
+        CoopSendStructureTable();
+        global.coopSeq = 0;   // a fresh peer starts from a clean sequence
         Trace("Co-op: handshake complete, peer is " + _v + ".");
         break;
 
@@ -199,6 +401,110 @@ switch (_cmd) {
             Trace("Co-op: still hosting, waiting for a new peer.");
         } else {
             CoopDisconnect("peer left");
+        }
+        break;
+
+    case CoopCmd.INTENT_PLACE:
+        // A client is asking us (the host) to place a structure. We validate it
+        // against our own world, apply it ourselves and broadcast the result.
+        var _iid   = buffer_read(_buf, buffer_u32);
+        var _iroom = buffer_read(_buf, buffer_u8);
+        var _ix    = buffer_read(_buf, buffer_s32);
+        var _iy    = buffer_read(_buf, buffer_s32);
+        var _iname = buffer_read(_buf, buffer_string);
+
+        if (!global.coopIsHost) {
+            Trace("Co-op: an intent arrived but we are not the host - ignored.");
+            break;
+        }
+        Trace("Co-op: <- intent place '" + _iname + "' at " + string(_ix) + "," + string(_iy)
+              + " room " + string(_iroom) + " (#" + string(_iid) + ")");
+
+        var _sid = CoopFindStructure(_iname);
+        if (_sid < 0) {
+            CoopSendIntentRejected(_iid, "unknown structure '" + _iname + "'");
+            break;
+        }
+        if (!instance_exists(objPlayer)) {
+            CoopSendIntentRejected(_iid, "the host is not in a world right now");
+            break;
+        }
+        if (_iroom != objPlayer.room) {
+            CoopSendIntentRejected(_iid, "the host is in room " + string(objPlayer.room)
+                                   + ", you are in " + string(_iroom));
+            break;
+        }
+        if (global.coopPeer.seen) {
+            var _dist = point_distance(_ix, _iy, global.coopPeer.x, global.coopPeer.y);
+            if (_dist > COOP_PLACE_RANGE) {
+                CoopSendIntentRejected(_iid, "too far from your player (" + string(round(_dist)) + " px)");
+                break;
+            }
+        }
+
+        var _placed = CoopCreateStructure(_sid, _ix, _iy, 0);
+        if (_placed < 0) {
+            CoopSendIntentRejected(_iid, "the host could not create it");
+            break;
+        }
+        CoopSendMutationPlace(_iid, _placed.x, _placed.y, _placed.depth, _iname);
+        Trace("Co-op: applied intent #" + string(_iid) + " as seq " + string(global.coopSeq) + ".");
+        break;
+
+    case CoopCmd.MUTATION_PLACE:
+        // The host's world changed. Apply it in sequence order, once.
+        var _seq   = buffer_read(_buf, buffer_u32);
+        var _miid  = buffer_read(_buf, buffer_u32);
+        var _mroom = buffer_read(_buf, buffer_u8);
+        var _mx    = buffer_read(_buf, buffer_s32);
+        var _my    = buffer_read(_buf, buffer_s32);
+        var _mdep  = buffer_read(_buf, buffer_s32);
+        var _mname = buffer_read(_buf, buffer_string);
+
+        if (_seq <= global.coopSeq) {
+            Trace("Co-op: ignoring stale mutation seq " + string(_seq)
+                  + " (we are already at " + string(global.coopSeq) + ").");
+            break;
+        }
+        global.coopSeq = _seq;
+        CoopForgetPending(_miid);
+        if (instance_exists(objPlayer) && _mroom != objPlayer.room) {
+            Trace("Co-op: mutation seq " + string(_seq) + " belongs to room " + string(_mroom)
+                  + ", we are in " + string(objPlayer.room) + " - not created here.");
+            break;
+        }
+        var _msid = CoopFindStructure(_mname);
+        if (_msid < 0) {
+            Trace("Co-op: mutation names an unknown structure '" + _mname + "' - ignored.");
+            break;
+        }
+        CoopCreateStructure(_msid, _mx, _my, _mdep);
+        Trace("Co-op: <- mutation seq " + string(_seq) + " '" + _mname + "' at "
+              + string(_mx) + "," + string(_my) + ".");
+        break;
+
+    case CoopCmd.INTENT_REJECTED:
+        var _rid  = buffer_read(_buf, buffer_u32);
+        var _rwhy = buffer_read(_buf, buffer_string);
+        Trace("Co-op: intent #" + string(_rid) + " was refused: " + _rwhy);
+        CoopUndoPrediction(_rid);
+        break;
+
+    case CoopCmd.STRUCTURE_TABLE:
+        // The host's view of the structure database. We already have our own, so
+        // this is a divergence check between the two installs.
+        var _tn    = buffer_read(_buf, buffer_u16);
+        var _match = 0;
+        for (var _t = 0; _t < _tn; _t++) {
+            var _tid   = buffer_read(_buf, buffer_u16);
+            var _tname = buffer_read(_buf, buffer_string);
+            if (_tid < array_length(global.coopStructNames)
+                && global.coopStructNames[_tid] == _tname) _match += 1;
+        }
+        Trace("Co-op: host structure table: " + string(_match) + "/" + string(_tn)
+              + " names match ours.");
+        if (_match < _tn) {
+            Trace("Co-op: WARNING - our structure databases differ; the two installs are not the same build.");
         }
         break;
 

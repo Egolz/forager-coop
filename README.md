@@ -9,12 +9,15 @@ toolchain. The mod is a folder of `.gml` files that Forager compiles itself.
 
 ## Status: early prototype — read this first
 
-| | |
+| | | 
 |---|---|
-| Milestone | **M1 of M5** — networking + presence |
-| What works | Host/join over TCP, a version-checked handshake, ping/pong, and you can see your friend's marker in the world |
-| What does **not** work yet | **The world is not synced.** Terrain, resources, items, structures and quests are independent per player. You will desync immediately if you both play normally. |
+| Milestone | **M2.1 of M5** — networking, presence and *structure placement* |
+| What works | Host/join over TCP, a version-checked handshake, ping/pong, and you can see your friend's marker in the world. Structure placement is implemented host-authoritatively (the client asks, the host decides and broadcasts) — **awaiting its first live test**, see below. |
+| What does **not** work yet | **The world is still not synced.** Terrain, resources, items, mobs and quests are independent per player, and there is no world snapshot on join, so the two players must already be looking at the same world for structure sync to mean anything. |
 | Tested on | Forager, Steam build **6160665** (Windows) |
+
+The protocol layer itself (framing, encoding, both directions) does have an automated
+check you can run without the game: `python tools/coop_mockpeer.py selftest`.
 
 This mod exists because the previous community mod, PencilPal, is gone from the Workshop
 and was reported to crash constantly. The write-up and the design live in the
@@ -52,7 +55,8 @@ Both players need a copy of the game, this mod installed and enabled.
 | **F5** | Host — starts listening on TCP **6511** |
 | **F6** | Join — asks for the host's IP address |
 | **F7** | Disconnect / stop hosting |
-| **F8** | Print connection status (peer, ping, peer position) |
+| **F8** | Print connection status (peer, ping, peer position, world sequence) |
+| **F9** | Print the first 24 entries of the structure database (id, name, object) |
 | **t** | Toggle the console |
 
 Host first (F5), then the other player joins (F6 → the host's IP). On one network that is
@@ -66,23 +70,32 @@ the join will just time out.
 ## Known issues
 
 - **No world sync** (M2–M3): see the status table above. This is the point of the project
-  and it is not done.
+  and it is not done. Structure *placement* syncs; nothing else does, and there is no world
+  snapshot on join, so it is only meaningful if both players are already in the same world.
+- Structure *removal* is not synced yet.
+- If the host refuses a placement, the client rolls it back but does **not** get the
+  resources back (inventories are not synced yet).
+- A client can only place while the host is in the world too; if the host is in a menu the
+  placement is refused.
 - The remote player is drawn as a **marker**, not the real sprite puppet.
 - Exactly **2 players**; no more.
 - No NAT traversal, no Steam friends list, no host migration.
 - Forager refuses to run **two instances on one PC**, so testing needs two machines (or a
   second Windows session/VM).
 - Mods other than this one are not handled: if you and your friend run different mods, the
-  world will not match. A version check exists but no mod-list check yet.
+  world will not match. A version check exists and the structure databases are compared, but
+  there is no mod-list check yet.
 
 ## Development
 
 ```
 Main.gml            entry point: globals, the packet enum, version
-Net.gml             sockets, handshake, ping/pong, presence, packet dispatch
+Net.gml             sockets, handshake, ping/pong, presence, packet dispatch,
+                    the structure database cache and the M2 sync helpers
 Events/OnStep.gml   hotkeys, heartbeats, presence cadence
 Events/OnNetworkAsync.gml   GameMaker async connect/disconnect/data callbacks
 Events/OnDrawEnd.gml        remote player marker
+Events/OnStructureSpawn.gml the host-authoritative placement hook
 tools/deploy.ps1            copy the mod into the game's mods folder
 tools/coop_mockpeer.py      a non-GameMaker peer for testing the protocol
 docs/PROTOCOL.md            packet format + GameMaker's socket handshake
@@ -94,8 +107,14 @@ tested against `tools/coop_mockpeer.py`, which speaks both GameMaker's socket ha
 and this mod's packets:
 
 ```powershell
-# game is hosting (F5 in game), then:
-python tools/coop_mockpeer.py client
+python tools/coop_mockpeer.py selftest          # offline: packet codec, no game needed
+
+# the game is HOSTING (F5 in game), then:
+python tools/coop_mockpeer.py client            # connect, talk, echo presence
+python tools/coop_mockpeer.py client --place forge
+                                                # ...and ask the host to build a forge
+python tools/coop_mockpeer.py client --no-place # presence only
+
 # or, to act as the host and have the game join:
 python tools/coop_mockpeer.py server
 ```

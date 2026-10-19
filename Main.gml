@@ -1,28 +1,34 @@
 #define Main
 // ============================================================================
-// Forager Co-op - M1: direct-TCP presence layer.
-// Design: ../../games/forager/DESIGN.md
-// API reference: https://topheranselmo.com/forager-modding-docs/
+// Forager Co-op - presence (M1) + host-authoritative structure placement (M2.1).
+//
+// Design:  https://github.com/cranebeaker/coop-anything/tree/main/games/forager
+// Protocol: docs/PROTOCOL.md
 //
 // This mod compiles with the game's own loader (main menu -> modding -> enable
 // the mod -> COMPILE). No external tool is required - proven by M0.
 //
-// Controls:  F5 = host   F6 = join   F7 = disconnect   F8 = status
+// Controls:  F5 = host   F6 = join   F7 = disconnect   F8 = status   F9 = dump structures
 // Console for Trace output: the `t` key.
 // ============================================================================
 
 enum CoopCmd {
-    HELLO   = 1,   // client -> host: protocol, mod version
-    WELCOME = 2,   // host -> client: protocol, mod version
-    REJECT  = 3,   // host -> client: reason
-    PING    = 4,   // either way: nonce
-    PONG    = 5,   // either way: nonce
-    POS     = 6,   // either way: puppet position/room/facing
-    BYE     = 7    // either way: reason
+    HELLO            = 1,   // client -> host: protocol, mod version
+    WELCOME          = 2,   // host -> client: protocol, mod version
+    REJECT           = 3,   // host -> client: reason
+    PING             = 4,   // either way: nonce
+    PONG             = 5,   // either way: nonce
+    POS              = 6,   // either way: puppet position/room/facing
+    BYE              = 7,   // either way: reason
+    // --- M2: world sync ---
+    INTENT_PLACE     = 8,   // client -> host: please place this structure
+    MUTATION_PLACE   = 9,   // host -> client: this structure exists now, at sequence N
+    INTENT_REJECTED  = 10,  // host -> client: that intent is refused, and here is why
+    STRUCTURE_TABLE  = 11   // host -> client: the structure id/name list
 }
 
-global.coopVersion  = "0.0.2-m1";
-global.coopProtocol = 1;
+global.coopVersion  = "0.0.3-m2a";
+global.coopProtocol = 2;   // 1 = presence only (M1); 2 adds the world-sync packets
 global.coopPort     = 6511;
 
 global.coopIsHost    = false;  // we own the listening server
@@ -39,6 +45,25 @@ global.coopPingSentAt  = -1;
 global.coopPingMs      = -1;
 global.coopTick        = 0;
 
+// ---------------------------------------------------------------------------
+// M2: host-authoritative world state.
+// The host owns the world. A client never writes to it: it asks (an "intent"),
+// the host decides, applies the change itself and broadcasts it with a
+// monotonic `seq`. Clients apply confirmed mutations in seq order.
+// ---------------------------------------------------------------------------
+global.coopSeq            = 0;     // sequence number of the last mutation applied
+global.coopIntentCounter  = 0;     // our own intent ids, to match confirmations
+global.coopPending        = [];    // our unconfirmed predictions: [ [id, x, y, name] ]
+global.coopApplyingRemote = false; // re-entrancy guard: we are applying a peer's change
+global.coopTmpStruct      = -1;    // scratch value, see CoopFindStructure()
+
+// A snapshot of the game's structure database, so a name can be turned into an
+// id and an object index without scanning the database on every packet.
+// CoopBuildStructDb() lives in Net.gml and rebuilds these two arrays.
+global.coopStructNames   = [];  // id -> lowercase name, e.g. "forge"
+global.coopStructObjects = [];  // id -> object index, e.g. objForge
+CoopBuildStructDb();
+
 Trace("Forager Co-op " + global.coopVersion + " loaded (protocol "
       + string(global.coopProtocol) + ", port " + string(global.coopPort) + ").");
-Trace("Keys: F5 host, F6 join, F7 disconnect, F8 status.");
+Trace("Keys: F5 host, F6 join, F7 disconnect, F8 status, F9 dump structures.");

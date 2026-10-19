@@ -1,11 +1,13 @@
 #define OnStep
 // Forager Co-op - per-frame pump: hotkeys, heartbeats, presence.
-// Nothing heavy happens here; world sync (M2) will batch on OnSystemStep.
+// World sync only reacts to events (OnStructureSpawn) and to packets; nothing
+// heavy is scanned here.
 
 if (keyboard_check_pressed(vk_f5)) CoopHost();
 if (keyboard_check_pressed(vk_f6)) CoopJoin();
 if (keyboard_check_pressed(vk_f7)) CoopDisconnect("requested");
 if (keyboard_check_pressed(vk_f8)) CoopStatus();
+if (keyboard_check_pressed(vk_f9)) CoopDumpStructures();
 
 if (!global.coopPeerAlive) exit;
 

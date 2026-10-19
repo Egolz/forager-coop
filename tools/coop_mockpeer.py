@@ -477,9 +477,20 @@ def run_selftest() -> int:
     return 0
 
 
-def run_client(host: str, port: int, place: str | None) -> None:
-    log(f"connecting to game host {host}:{port}")
-    s = socket.create_connection((host, port), timeout=5)
+def run_client(host: str, port: int, place: str | None, wait: float = 0.0) -> None:
+    log(f"connecting to game host {host}:{port}"
+        + (f" (retrying for up to {wait:.0f}s - start hosting whenever)" if wait > 0 else ""))
+    deadline = time.time() + wait
+    while True:
+        try:
+            s = socket.create_connection((host, port), timeout=5)
+            break
+        except OSError as exc:
+            if time.time() >= deadline:
+                log(f"!! could not connect: {exc}")
+                raise SystemExit(1)
+            time.sleep(1.0)
+    log("connected")
     peer = Peer(s, is_host=False, place=place)
     while not peer.ready:
         peer.pump()
@@ -557,13 +568,15 @@ def main() -> int:
                     help="structure name to ask the host for (auto if omitted)")
     ap.add_argument("--no-place", action="store_true",
                     help="do not request a structure at all")
+    ap.add_argument("--wait", type=float, default=0.0,
+                    help="client mode: keep retrying the connection for this many seconds")
     args = ap.parse_args()
     place = "" if args.no_place else args.place
     try:
         if args.mode == "selftest":
             return run_selftest()
         if args.mode == "client":
-            run_client(args.host, args.port, place)
+            run_client(args.host, args.port, place, args.wait)
         elif args.mode == "probe":
             run_probe(args.host, args.port, settle=4.0)
         else:

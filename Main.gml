@@ -30,6 +30,7 @@ enum CoopCmd {
 global.coopVersion  = "0.0.3-m2a";
 global.coopProtocol = 2;   // 1 = presence only (M1); 2 adds the world-sync packets
 global.coopPort     = 6511;
+global.coopPlaceRange = 448;   // see Net.gml: how far a client may place from itself
 
 global.coopIsHost    = false;  // we own the listening server
 global.coopConnected = false;  // a peer socket is up
@@ -53,9 +54,8 @@ global.coopTick        = 0;
 // ---------------------------------------------------------------------------
 global.coopSeq            = 0;     // sequence number of the last mutation applied
 global.coopIntentCounter  = 0;     // our own intent ids, to match confirmations
-global.coopPending        = [];    // our unconfirmed predictions: [ [id, x, y, name] ]
+global.coopPending        = [];    // our unconfirmed predictions: [ [id, x, y, sid, obj] ]
 global.coopApplyingRemote = false; // re-entrancy guard: we are applying a peer's change
-global.coopTmpStruct      = -1;    // scratch value, see CoopFindStructure()
 
 // A snapshot of the game's structure database, so a name can be turned into an
 // id and an object index without scanning the database on every packet.

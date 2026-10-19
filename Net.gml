@@ -134,9 +134,12 @@ CoopSend(_b);
 // twice within a single block.
 // ---------------------------------------------------------------------------
 
-#define COOP_PLACE_RANGE 448
 // A client may only place within this many pixels of its own puppet - a cheap
 // sanity/anti-grief check, not a real anti-cheat.
+// Kept as a global rather than a #define: this loader does not accept value
+// macros (#define NAME 448) - it reads a macro body as statements and stops with
+// "Expected a statement, got number" (seen in the live build, Net.gml L137).
+// (global.coopPlaceRange is set in Main.gml.)
 
 #define CoopBuildStructDb()
 // Reads the game's structure database into global.coopStructNames/Objects
@@ -204,21 +207,40 @@ if (_cs_obj < 0) return -1;
 var _cs_where = CoopStructureAt(_cs_obj, _x, _y);
 if (_cs_where >= 0) {
     // already there - usually our own optimistic placement, so adopt it
-    if (variable_instance_exists(_cs_where, "structure")) _cs_where.structure = _sid;
+    try {
+        _cs_where.structure = _sid;
+    } catch (_cs_werr) {
+        Trace("Co-op: could not set .structure on the existing instance: " + string(_cs_werr));
+    }
     return _cs_where;
 }
 
 global.coopApplyingRemote = true;
 var _cs_new = instance_create_depth(floor(_x), floor(_y), floor(_depth), _cs_obj);
-if (variable_instance_exists(_cs_new, "structure")) _cs_new.structure = _sid;
+try {
+    _cs_new.structure = _sid;
+} catch (_cs_nerr) {
+    Trace("Co-op: could not set .structure on the new instance: " + string(_cs_nerr));
+}
 global.coopApplyingRemote = false;
 return _cs_new;
+
+#define CoopPendingRemoveAt(_pi)
+// Drop the pending prediction at index _pi. This build has no array_delete()
+// (checked against its symbol table), so rebuild the list instead - it holds at
+// most a handful of unconfirmed predictions.
+var _pr_new = [];
+var _pr_n   = array_length(global.coopPending);
+for (var _pr_i = 0; _pr_i < _pr_n; _pr_i++) {
+    if (_pr_i != _pi) array_push(_pr_new, array_get(global.coopPending, _pr_i));
+}
+global.coopPending = _pr_new;
 
 #define CoopForgetPending(_iid)
 var _fp_n = array_length(global.coopPending);
 for (var _fp_i = 0; _fp_i < _fp_n; _fp_i++) {
     if (array_get(array_get(global.coopPending, _fp_i), 0) == _iid) {
-        array_delete(global.coopPending, _fp_i, 1);
+        CoopPendingRemoveAt(_fp_i);
         break;
     }
 }
@@ -247,7 +269,7 @@ for (var _up_i = 0; _up_i < _up_n; _up_i++) {
             }
         }
     }
-    array_delete(global.coopPending, _up_i, 1);
+    CoopPendingRemoveAt(_up_i);
     break;
 }
 
@@ -436,7 +458,7 @@ switch (_cmd) {
         }
         if (global.coopPeer.seen) {
             var _dist = point_distance(_ix, _iy, global.coopPeer.x, global.coopPeer.y);
-            if (_dist > COOP_PLACE_RANGE) {
+            if (_dist > global.coopPlaceRange) {
                 CoopSendIntentRejected(_iid, "too far from your player (" + string(round(_dist)) + " px)");
                 break;
             }

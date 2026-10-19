@@ -97,14 +97,35 @@ Events/OnNetworkAsync.gml   GameMaker async connect/disconnect/data callbacks
 Events/OnDrawEnd.gml        remote player marker
 Events/OnStructureSpawn.gml the host-authoritative placement hook
 tools/deploy.ps1            copy the mod into the game's mods folder
+tools/check_gml.py          offline sanity check: brackets, duplicate vars, macro
+                            arity, value macros, and every call checked against the
+                            game build's symbol table (data.win)
 tools/coop_mockpeer.py      a non-GameMaker peer for testing the protocol
 docs/PROTOCOL.md            packet format + GameMaker's socket handshake
 ```
 
 There is no build step: edit the files, run `tools/deploy.ps1`, then **COMPILE** in the
-game's modding menu. Since two Forager instances cannot run on one PC, the protocol is
-tested against `tools/coop_mockpeer.py`, which speaks both GameMaker's socket handshake
-and this mod's packets:
+game's modding menu.
+
+**Run the checker before every deploy.** A mod that fails to compile does not announce
+itself in-game: no error on screen, its events simply never run. Two ways this bit us
+already, both now caught offline:
+
+- **No value macros.** `#define PLACE_RANGE 448` is rejected by this loader
+  (`Expected a statement, got number`) and takes the whole mod down. A macro body must be
+  statements; use a global for a constant.
+- **Not every GML builtin exists here.** `array_delete()` and `variable_instance_exists()`
+  are absent from this build's symbol table. The checker looks every function you call up
+  in `data.win`, so pass `--data-win` (or set `FORAGER_DATA_WIN`) and it will tell you.
+
+```powershell
+python tools/check_gml.py              # uses the default Steam path
+python tools/check_gml.py --data-win "D:\Games\Forager\data.win"
+```
+
+Since two Forager instances cannot run on one PC, the protocol is tested against
+`tools/coop_mockpeer.py`, which speaks both GameMaker's socket handshake and this mod's
+packets:
 
 ```powershell
 python tools/coop_mockpeer.py selftest          # offline: packet codec, no game needed

@@ -101,6 +101,11 @@ tools/check_gml.py          offline sanity check: brackets, duplicate vars, macr
                             arity, value macros, and every call checked against the
                             game build's symbol table (data.win)
 tools/coop_mockpeer.py      a non-GameMaker peer for testing the protocol
+tools/mock_e2e.ps1          offline end-to-end test of that peer: mock server <->
+                            mock client, asserts the whole session (handshake,
+                            welcome, pong, structure table, INTENT_PLACE).
+                            No game needed - this is what caught the two bugs in
+                            the mock itself.
 docs/PROTOCOL.md            packet format + GameMaker's socket handshake
 ```
 

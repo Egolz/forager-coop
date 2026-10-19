@@ -45,10 +45,13 @@ overrides that and `--no-place` turns the request off.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import random
 import socket
 import struct
 import sys
+import tempfile
 import time
 
 PROTOCOL = 2
@@ -112,6 +115,14 @@ def pos(x: int, y: int, angle: int = 0, facing: int = 1,
 def intent_place(intent_id: int, room: int, x: int, y: int, name: str) -> bytes:
     return (bytes([INTENT_PLACE]) + struct.pack("<IBii", intent_id, room, x, y)
             + p_str(name))
+
+
+def structure_table(entries: list[tuple[int, str]]) -> bytes:
+    """The packet only the host sends, id -> name (packet 11)."""
+    out = bytes([STRUCTURE_TABLE]) + struct.pack("<H", len(entries))
+    for sid, name in entries:
+        out += struct.pack("<H", sid) + p_str(name)
+    return out
 
 
 def bye(reason: str) -> bytes:
@@ -249,6 +260,7 @@ class Peer:
         self.buf = b""
         self.ready = False          # GM handshake finished
         self.handshaken = False     # mod handshake finished
+        self.sent_banner = False    # only the server side sends the GM banner
         self.nonce = 0
         self.last_ping = 0.0
         self.room = 0               # room learned from the game's POS packets
@@ -278,23 +290,33 @@ class Peer:
         if chunk is None:
             log("connection closed")
             raise SystemExit(0)
-        if not chunk:
-            return
-        self.buf += chunk
+        if chunk:
+            self.buf += chunk
         if not self.ready:
+            # Not guarded by `if chunk`: the server side has to speak first (the
+            # GM banner) before the client will say anything, so this must be
+            # allowed to run on an empty buffer or the two sides wait forever.
             self._gm_handshake()
         if self.ready:
             self._frames()
 
     def _gm_handshake(self) -> None:
         if self.is_host:
-            if self.buf[:len(HANDSHAKE_SV0)] == HANDSHAKE_SV0 and len(self.buf) >= 16:
-                self.buf = self.buf[len(HANDSHAKE_SV0):]
-            if len(self.buf) < 16:
+            # GameMaker's *server* speaks first: the 18-byte banner, then the
+            # client's 12 bytes (0xCAFEBABE, 0xDEADB00B, 16), then our 12.
+            # The mod never sees this - the game's own netcode does it - which is
+            # exactly why this side of the mock has to do it by hand. Sending the
+            # banner matters: a GameMaker client waits for it before it says
+            # anything, so without this line the two sides wait for each other.
+            if not self.sent_banner:
+                self.sock.sendall(HANDSHAKE_SV0)
+                self.sent_banner = True
+                log("GM handshake: server banner sent")
+            if len(self.buf) < 12:
                 return
             sig1, sig2, size = struct.unpack("<III", self.buf[:12])
             log(f"GM handshake: client sigs {sig1:#010x} {sig2:#010x} size={size}")
-            self.buf = self.buf[16:]
+            self.buf = self.buf[16:] if len(self.buf) >= 16 else self.buf[12:]
             self.sock.sendall(struct.pack("<III", HANDSHAKE_SV1, HANDSHAKE_SV2, 12))
             log("GM handshake complete (server side)")
             self.ready = True
@@ -349,6 +371,12 @@ class Peer:
                 raise SystemExit(1)
             self.send(welcome())
             log("-> WELCOME")
+            # Emulate the game host: it sends its structure table right after
+            # WELCOME. With this, mock server <-> mock client locally exercises
+            # the client's whole place path (choose -> INTENT_PLACE) with no
+            # game running, which is how a bug in that path is caught.
+            self.send(structure_table([(0, "land"), (1, "forge")]))
+            log("-> STRUCTURE_TABLE 2 entries")
             self.handshaken = True
         elif name == "WELCOME" and not self.is_host:
             if pkt["protocol"] != PROTOCOL:
@@ -360,6 +388,7 @@ class Peer:
             log(f"   host knows {len(self.structs)} structures: "
                 + ", ".join(n for _, n in self.structs[:12])
                 + (" ..." if len(self.structs) > 12 else ""))
+            dump_structs(self.structs)
             if not self.placed and self.place_wanted != "":
                 self.place_due = time.time() + 2.0   # give the game a moment
         elif name == "PING":
@@ -408,13 +437,34 @@ class Peer:
                 return
             # put it a little to the right of the game's player - near enough for
             # the host's range check, far enough to be an obvious new object
-            px, py = self.player or self.px, self.py
+            if self.player is not None:
+                px, py = self.player
+            else:
+                px, py = self.px, self.py
             tx, ty = (px + 128, py)
             room = self.room if self.room else 8
             self.last_intent = (intent_id := random.randint(1, 0xFFFF))
             log(f"-> INTENT_PLACE '{name}' at {tx},{ty} (room {room}, "
                 f"#{intent_id}); our puppet is at {self.px},{self.py}")
             self.send(intent_place(intent_id, room, tx, ty, name))
+
+
+def dump_structs(structs: list[tuple[int, str]]) -> None:
+    """Write the host's structure table to a UTF-8 JSON file.
+
+    These names are the game's own strings, so on a non-English install they are
+    localized - the console mangles them and a PowerShell `>` redirect is not
+    UTF-8, so this file is the only trustworthy copy. It also serves the
+    cross-install divergence check (same build + same language => same names).
+    """
+    path = os.path.join(tempfile.gettempdir(), "coop_structure_table.json")
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump([{"id": i, "name": n} for i, n in structs],
+                      fh, ensure_ascii=False, indent=1)
+    except OSError:
+        return
+    log(f"   (table written to {path})")
 
 
 def run_selftest() -> int:
@@ -477,7 +527,8 @@ def run_selftest() -> int:
     return 0
 
 
-def run_client(host: str, port: int, place: str | None, wait: float = 0.0) -> None:
+def run_client(host: str, port: int, place: str | None, wait: float = 0.0,
+               run_for: float = 0.0) -> None:
     log(f"connecting to game host {host}:{port}"
         + (f" (retrying for up to {wait:.0f}s - start hosting whenever)" if wait > 0 else ""))
     deadline = time.time() + wait
@@ -497,10 +548,14 @@ def run_client(host: str, port: int, place: str | None, wait: float = 0.0) -> No
     log("sending HELLO")
     peer.send(hello())
     log("-> HELLO")
+    stop_at = time.time() + run_for if run_for > 0 else None
     while True:
         peer.pump()
         peer.tick()
         time.sleep(0.1)
+        if stop_at is not None and time.time() >= stop_at:
+            log(f"(--for {run_for:.0f}s reached; done)")
+            return
 
 
 def run_probe(host: str, port: int, settle: float) -> None:
@@ -570,13 +625,15 @@ def main() -> int:
                     help="do not request a structure at all")
     ap.add_argument("--wait", type=float, default=0.0,
                     help="client mode: keep retrying the connection for this many seconds")
+    ap.add_argument("--for", dest="run_for", type=float, default=0.0,
+                    help="client mode: exit after this many seconds (0 = run until stopped)")
     args = ap.parse_args()
     place = "" if args.no_place else args.place
     try:
         if args.mode == "selftest":
             return run_selftest()
         if args.mode == "client":
-            run_client(args.host, args.port, place, args.wait)
+            run_client(args.host, args.port, place, args.wait, args.run_for)
         elif args.mode == "probe":
             run_probe(args.host, args.port, settle=4.0)
         else:

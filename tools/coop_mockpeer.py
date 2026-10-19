@@ -327,6 +327,12 @@ class Peer:
         self.place_spots: list[tuple[int, int]] = []
         self.last_spot: tuple[int, int] | None = None
         self.mutation_seen = False
+        # How many builds to ask for in one session. One is enough to test "can a
+        # client place at all"; two is what tests a *new* refusal, because the
+        # second request can be aimed at the structure the first one just made.
+        self.place_rounds = 2
+        self.place_round = 0
+        self.place_abs: tuple[int, int] | None = None   # round 2 aims absolutely
         self.sock.settimeout(0.2)
 
     # -- sending ------------------------------------------------------------
@@ -494,20 +500,32 @@ class Peer:
                 self.place_try += 1
                 if self.place_try < len(self.place_spots):
                     self.place_due = time.time() + 0.5   # ask again elsewhere
-                    log(f"   retrying at another spot (water was at {self.last_spot})")
+                    log(f"   retrying at another spot (refused at {self.last_spot})")
                 else:
                     self.placed = True
-                    log("!! every candidate spot was refused - all water near the player")
+                    log("!! every candidate spot was refused - the ring is all water or occupied")
         elif name == "MUTATION_PLACE":
-            # A confirmed placement. If it is the answer to our own intent we are
-            # done, and the spot we asked for was land - the positive half of the
-            # spot-check test.
+            # A confirmed placement. If it is the answer to our own intent, that spot
+            # was free - the positive half of the spot check. A second round then asks
+            # for the *same* cell the first build now occupies, which should come back
+            # refused if the occupancy rule works; a mock that stopped here could
+            # never show that.
             if pkt["intentId"] and pkt["intentId"] == self.last_intent:
                 self.mutation_seen = True
-                self.placed = True
                 log(f"   accepted: '{pkt['name']}' at {pkt['x']},{pkt['y']} "
                     f"(seq {pkt['seq']}, depth {pkt['depth']}) - "
-                    f"the spot we asked for ({self.last_spot}) was land")
+                    f"the spot we asked for ({self.last_spot}) was free")
+                if self.place_round + 1 < self.place_rounds:
+                    self.place_round += 1
+                    self.place_try = 0
+                    self.place_abs = (pkt["x"], pkt["y"])   # aim at what we just made
+                    self.place_spots = [(0, 0)]             # one aim only this round
+                    self.mutation_seen = False
+                    self.place_due = time.time() + 3.0
+                    log(f"   round {self.place_round + 1}: will ask for the occupied cell "
+                        f"({pkt['x']},{pkt['y']})")
+                else:
+                    self.placed = True
         elif name in ("REJECT", "BYE"):
             log("peer ended the session")
             raise SystemExit(0)
@@ -555,8 +573,10 @@ class Peer:
             y = by + (0 if t < 10 else (t - 10) if t < 20 else 10 if t < 30 else (40 - t))
             self.px, self.py = x, y
             self.send(pos(x, y, angle=0, facing=1, sprite=-1, image=0, room=self.room))
-        # ask the host to build something, once - retrying other spots if the host
-        # says the one we picked is water, so a run shows the refusal *and* a build
+        # ask the host to build something; retry other spots on a spot refusal
+        # (water or occupancy), and after a success start the next round, so a run
+        # shows the refusal *and* a build - and, with a second round, a spot that is
+        # refused because the first build now occupies it
         if self.place_due and not self.placed and now >= self.place_due:
             name = self.choose_structure()
             if name is None:
@@ -568,24 +588,30 @@ class Peer:
             else:
                 px, py = self.px, self.py
             if not self.place_spots:
-                # A ring of offsets around the game's player: the first is the one we
-                # used before (a little to the right), then further out in each
-                # direction, so a pond, a shoreline or a tree is stepped over instead
-                # of ending the test. All stay inside the host's 448 px range check.
-                # Two obstacles can now refuse a spot - water and occupancy - so the
-                # ring is denser than the water-only version was.
-                self.place_spots = [(128, 0), (-128, 0), (0, 128), (0, -128),
+                # Offsets around the game's player. The first is *on* the player, so
+                # if the owner stands beside a tree or a rock the very first request
+                # lands in that occupied cell and the new rule is what answers it;
+                # the rest ring outward, so a pond, a shoreline or a tree is stepped
+                # over instead of ending the test. All stay inside the host's 448 px
+                # range check. Two obstacles can refuse a spot now - water and
+                # occupancy - so the ring is denser than the water-only version was.
+                self.place_spots = [(0, 0), (16, 0), (0, 16), (-16, 0), (0, -16),
+                                    (128, 0), (-128, 0), (0, 128), (0, -128),
                                     (192, 96), (-192, 96), (192, -96), (-192, -96),
                                     (256, 0), (0, 256), (256, 128), (-256, 128),
                                     (256, -128), (-256, -128), (128, 192), (-128, 192),
                                     (128, -192), (-128, -192), (320, 0), (0, 320)]
             dx, dy = self.place_spots[self.place_try % len(self.place_spots)]
-            tx, ty = (px + dx, py + dy)
+            if self.place_abs is not None:
+                tx, ty = self.place_abs            # round 2: an exact cell, not an offset
+            else:
+                tx, ty = (px + dx, py + dy)
             room = self.room if self.room else 8
             self.last_intent = (intent_id := random.randint(1, 0xFFFF))
             self.last_spot = (tx, ty)
             log(f"-> INTENT_PLACE '{name}' at {tx},{ty} (room {room}, "
-                f"#{intent_id}, spot {self.place_try + 1}/{len(self.place_spots)}); "
+                f"#{intent_id}, round {self.place_round + 1}, "
+                f"spot {self.place_try + 1}/{len(self.place_spots)}); "
                 f"our puppet is at {self.px},{self.py}")
             self.send(intent_place(intent_id, room, tx, ty, name))
 
@@ -700,8 +726,31 @@ def run_selftest() -> int:
                                     + struct.pack("<IIB", 7, second["intentId"], 8)
                                     + struct.pack("<iii", second["x"], second["y"], -second["y"])
                                     + p_str("forge"))
-                if not peer.placed or not peer.mutation_seen:
-                    failures.append("retry: an accepted mutation did not settle the walk")
+                if peer.placed:
+                    failures.append("retry: the walk settled after round 1, so round 2 "
+                                    "can never test the occupied cell")
+                if peer.place_round != 1:
+                    failures.append(f"retry: round after a success is {peer.place_round}")
+                if peer.place_abs != (second["x"], second["y"]):
+                    failures.append(f"retry: round 2 aims at {peer.place_abs}, "
+                                    f"not the cell just built at {(second['x'], second['y'])}")
+                # Round 2: the host sees its own new structure in that cell and must
+                # refuse it as occupied.
+                peer.place_due = time.time() - 1.0
+                peer.tick()
+                intents = [p for p in sent if p["name"] == "INTENT_PLACE"]
+                if len(intents) < 3:
+                    failures.append("retry: round 2 did not ask at the built cell")
+                elif (intents[-1]["x"], intents[-1]["y"]) != (second["x"], second["y"]):
+                    failures.append("retry: round 2 asked somewhere else")
+                else:
+                    third = intents[-1]
+                    peer.handle_payload(bytes([INTENT_REJECTED])
+                                        + struct.pack("<I", third["intentId"])
+                                        + p_str("that spot is already occupied"))
+                    if not peer.placed:
+                        failures.append("retry: an occupied refusal on the last aim "
+                                        "did not settle the walk")
     finally:
         a.close()
         b.close()

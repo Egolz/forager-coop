@@ -580,13 +580,26 @@ for (var _pa_ii = 0; _pa_ii < array_length(_pa_ids); _pa_ii++) {
 var _pa_safe = ScriptCall(ScriptWrap("GetLandsOwned"));
 array_push(_pa_lines, "ScriptCall(ScriptWrap(\"GetLandsOwned\")) = " + string(_pa_safe));
 
-// 4) Last resort, deliberately NOT enabled: a bare `WaterCollision(x, y)` is
-//    expected to fail at COMPILE with "`WaterCollision` is not function or
-//    script", so it stays commented and the mod keeps building. InsideMod /
-//    ModCall look like the argument-passing path, but their signatures are not
-//    documented and a wrong guess costs a whole COMPILE cycle - one question at a
-//    time. Enable this line alone, in a dedicated run, once 1-4 are read.
-// var _pa_bare = WaterCollision(_pa_px, _pa_py);
+// 4) The direct call. The docs list WaterCollision in "General Forager Behavior"
+//    next to HasSkill and LighthouseCalculate, which read as plain callable
+//    functions - not as things you reach through a wrapper at all. Everything so
+//    far says the wrapper path is a dead end for a first-party script:
+//      * ScriptWrap resolves the name inside OUR mod ([wrapper, EgolzForagerCoop, ...])
+//      * ModFunctionGet("Forager", ...) = undefined, and ModFind/ModIsOnline say
+//        the game is not registered as a mod under any id we tried.
+//    So the only spelling left is the bare call. It may fail at COMPILE with
+//    "`WaterCollision` is not function or script" - that is a cheap answer and
+//    worth one cycle, because success means the whole water question is closed.
+//    Kept to a single line so a failure names this and nothing else.
+var _pa_dir = WaterCollision(_pa_px, _pa_py);
+array_push(_pa_lines, "WaterCollision(" + string(_pa_px) + "," + string(_pa_py) + ") = " + string(_pa_dir));
+
+// 4b) The control for that: HasSkill sits in the same docs list. A skill index of
+//     0 is a real query, and if both of these compile while only one answers, it
+//     separates "the bare-call syntax is wrong" from "the function itself is not
+//     there".
+var _pa_skill = HasSkill(0);
+array_push(_pa_lines, "HasSkill(0) = " + string(_pa_skill));
 
 array_push(_pa_lines, "=== api probe end ===");
 

@@ -513,12 +513,18 @@ if (global.coopSocket < 0) {
 // `WaterCollision(x, y)` is documented ("Checks for a water tile at the given
 // x/y"), but it is a **first-party API script**, not a builtin this build exports
 // to mod GML - a bare `WaterCollision(x, y)` resolves as "not function or script"
-// and takes the whole mod down. The documented way to reach a script is a
-// wrapper. Two spellings are plausible and each is reported separately, so one
-// COMPILE says which one this loader takes. Read-only; it creates nothing.
+// and takes the whole mod down.
 //
-// The call itself is walled off in its own macro so that when one guess is wrong
-// the failure is one macro, and the F10 world probe keeps working.
+// Live COMPILE (2026-10-20) settled the wrapper shape for us:
+//     Mod failed to unit! Forager Coop/Net.gml[L536,c16] `ScriptCall` takes 1 argument, got 3.
+// So ScriptCall(wrapper) takes the wrapper **only** - no argument list. The docs
+// agree once you read them closely: ScriptWrap returns a 2d array [mod, methodName],
+// and ScriptCall "executes a script based on the provided wrapper". A first-party
+// script that *needs parameters* (WaterCollision wants x and y) therefore cannot be
+// reached this way, which is what this probe reports.
+//
+// It stays diagnostic: it records what each accessor actually returns, with no
+// call that could take the game down. Read-only; it creates nothing.
 if (!instance_exists(objPlayer)) {
     Trace("Co-op: F11 needs a loaded world.");
     exit;
@@ -530,24 +536,32 @@ var _pa_lines = [];
 array_push(_pa_lines, "=== api probe begin " + global.coopVersion + " ===");
 array_push(_pa_lines, "player " + string(_pa_px) + "," + string(_pa_py));
 
-// 1) is the spot legal at all? WaterCollision(x, y) -> real/bool.
-//    Called by name through a wrapper, the documented path for any script.
+// 1) What is a ScriptWrapper, really? The docs say "2d array [mod, methodName]".
+//    Printing it says whether the name resolves and what the first-party mod id is.
 var _pa_wrap = ScriptWrap("WaterCollision");
-var _pa_here = ScriptCall(_pa_wrap, _pa_px, _pa_py);
-var _pa_up   = ScriptCall(_pa_wrap, _pa_px, _pa_py - 64);
-var _pa_side = ScriptCall(_pa_wrap, _pa_px + 128, _pa_py);
-array_push(_pa_lines, "WaterCollision at player  = " + string(_pa_here));
-array_push(_pa_lines, "WaterCollision 64 above   = " + string(_pa_up));
-array_push(_pa_lines, "WaterCollision 128 right  = " + string(_pa_side));
+array_push(_pa_lines, "ScriptWrap type   = " + string(typeof(_pa_wrap))
+           + ", len " + string(array_length(_pa_wrap)));
+var _pa_wn = array_length(_pa_wrap);
+for (var _pa_wi = 0; _pa_wi < _pa_wn; _pa_wi++) {
+    array_push(_pa_lines, "  wrap[" + string(_pa_wi) + "] = " + string(array_get(_pa_wrap, _pa_wi)));
+}
 
-// 2) the same script fetched by name from the first-party mod ("Forager").
+// 2) The first-party lookup: does "Forager" expose WaterCollision by name?
 var _pa_fn = ModFunctionGet("Forager", "WaterCollision");
 if (_pa_fn == undefined) {
-    array_push(_pa_lines, "ModFunctionGet: Forager has no 'WaterCollision'");
+    array_push(_pa_lines, "ModFunctionGet(\"Forager\",\"WaterCollision\") = undefined");
 } else {
-    var _pa_m = ScriptCall(_pa_fn, _pa_px, _pa_py);
-    array_push(_pa_lines, "ModFunctionGet result     = " + string(_pa_m));
+    array_push(_pa_lines, "ModFunctionGet type = " + string(typeof(_pa_fn))
+               + ", value " + string(_pa_fn));
 }
+
+// 3) Calling a no-argument first-party script through the documented path is
+//    safe. GetLandsOwned takes no arguments (docs: "Returns how many lands the
+//    player has") and is in this build, so it is the control: if this line answers
+//    with a number, ScriptCall(wrapper) works for zero-argument scripts, and the
+//    only thing WaterCollision needs that we cannot supply is its x/y.
+var _pa_safe = ScriptCall(ScriptWrap("GetLandsOwned"));
+array_push(_pa_lines, "ScriptCall(ScriptWrap(\"GetLandsOwned\")) = " + string(_pa_safe));
 
 array_push(_pa_lines, "=== api probe end ===");
 

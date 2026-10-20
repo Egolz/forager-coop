@@ -27,4 +27,32 @@
 // world (no `objPlayer`, no instances). It clears the plant snapshot, whose handles point
 // into the room being destroyed, and the two re-entrancy flags, which can only be set for the
 // instant of an apply and would otherwise disable the loot path in the next world.
+//
+// ---------------------------------------------------------------------------
+// Diagnostic (temporary, 2026-10-20). The owner clarified the symptom: the game does **not**
+// crash while playing - it runs for minutes and then dies exactly when "save and quit" is
+// pressed, instead of returning to the main menu. That makes this handler the prime suspect,
+// because it is the only mod entry point that runs during world teardown.
+//
+// It sends a line **before** and a line **after** `CoopLeaveWorld()`, so the next quit answers
+// two questions at once with no guessing: does this event fire at all, and does the fault land
+// inside our teardown or after it? `CoopSendDebugLine` is fire-and-forget over the existing
+// socket, so it cannot itself fail an assertion - the mock just writes down what arrived.
+//
+// **`OUT` must go out before the close**, because `CoopLeaveWorld` now ends the session and a
+// line sent after that has no socket to travel on - the diagnostic would silence itself. So the
+// close is split from the state clearing: `CoopForgetWorld` drops the stale handles first (it
+// touches nothing but globals), `OUT` reports on the socket that is still open, and only then
+// `CoopLeaveWorld` performs the close. What `OUT` says about `sock` is therefore the value
+// *before* the close, which is exactly what has to be recorded to interpret the next run.
+CoopSendDebugLine("probe roomload IN peerAlive=" + string(global.coopPeerAlive)
+                  + " connected=" + string(global.coopConnected)
+                  + " host=" + string(global.coopIsHost)
+                  + " sock=" + string(global.coopSocket)
+                  + " player=" + string(instance_exists(objPlayer))
+                  + " tick=" + string(global.coopTick));
+CoopForgetWorld();
+CoopSendDebugLine("probe roomload OUT survived tick=" + string(global.coopTick)
+                  + " sock=" + string(global.coopSocket)
+                  + " host=" + string(global.coopIsHost));
 CoopLeaveWorld();

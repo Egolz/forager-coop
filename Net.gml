@@ -101,20 +101,57 @@ global.coopApplyingRemote = false;
 // is stop *describing* the dead world, which is the part that was crashing.
 // ---------------------------------------------------------------------------
 
-#define CoopLeaveWorld()
-// The world is unloading. Forget everything that points into it.
-//
-// `coopApplyingRemote`/`coopApplyingLoot` are cleared too: they are set only for the instant
-// of an apply, so a session cannot legitimately be left holding them, and a stale flag would
-// silently disable the loot path when the next world loads.
-global.coopBushObjAt      = [];   // the snapshot is the crash: it holds instance handles
-global.coopBushIds        = [];   // for a world that is being destroyed
+#define CoopForgetWorld()
+// Drop everything that points into the world being destroyed - **state only, no socket**.
+// Split out of CoopLeaveWorld so the room-load diagnostic can report on a still-open socket
+// before the session is ended; see OnRoomLoad for why the order matters.
+global.coopBushObjAt      = [];   // the snapshot holds instance handles for a world that is
+global.coopBushIds        = [];   // being destroyed
 global.coopBushXs         = [];
 global.coopBushYs         = [];
 global.coopBushObj        = -2;
 global.coopApplyingRemote = false;
 global.coopApplyingLoot   = false;
-global.coopPeer.seen      = false;  // the peer is still connected; we just cannot see them
+global.coopPeer.seen      = false;  // the peer is gone with the session
+
+#define CoopLeaveWorld()
+// The world is unloading. Forget everything that points into it, **and end the session**.
+//
+// `coopApplyingRemote`/`coopApplyingLoot` are cleared too: they are set only for the instant
+// of an apply, so a session cannot legitimately be left holding them, and a stale flag would
+// silently disable the loot path when the next world loads.
+//
+// ---------------------------------------------------------------------------
+// **The session is closed here, and that is the point of this change (2026-10-20 ~23:20).**
+//
+// The room-load diagnostic settled where the fault is *not*: on "save and quit" this handler
+// runs, completes, and reports `OUT survived tick=...` to the peer - and only then does the
+// process die (`0xc0000005` at `0x012c265f`). The last frame mod sent anything is tick 5985,
+// the death follows within about a second, and nothing of ours runs in between. So the fault
+// is **after** this handler, in the teardown that follows it.
+//
+// What made that teardown different from every other frame is the socket. The game closes its
+// own sockets on "save & quit" (its `OnStep` counts `disconnectTimer` to 60, then destroys
+// `tcpServer` and `partnerSocket` - see the reference mod's OnStep.gml), while **this mod kept
+// its socket open right through it**. A live socket registered with the runtime's network
+// layer, left in place while that layer is being torn down, is exactly the shape of a fault
+// inside the runner's own networking code: one fixed instruction, only when a peer is
+// connected, minutes into a session because it needs the quit to happen.
+//
+// Dropping the peer here costs nothing and removes the asymmetry: the socket is closed
+// **before** the engine starts its own teardown, on the same event the engine uses for that
+// job. The session is a transport fact, so a peer that wants to stay connected can simply
+// reconnect - and the mod's own `OnRoomLoad` fires twice, so a guard keeps the second pass
+// from touching an already-closed socket.
+if (global.coopConnected || global.coopIsHost) {
+    CoopResetPeer();
+    if (global.coopServer >= 0) {
+        network_destroy(global.coopServer);
+        global.coopServer = -1;
+    }
+    global.coopIsHost = false;
+}
+CoopForgetWorld();
 
 #define CoopHost()
 if (global.coopIsHost) { Trace("Co-op: already hosting."); exit; }

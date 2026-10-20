@@ -77,6 +77,7 @@ global.coopConnected   = false;
 global.coopPeerAlive   = false;
 global.coopPeer.seen   = false;
 global.coopPeerVersion = "";
+global.coopPeerName    = "";   // M3.1: the peer is gone with the session, so is their name
 global.coopPingSentAt  = -1;
 global.coopPingMs      = -1;
 global.coopSocket      = -1;
@@ -227,14 +228,22 @@ var _b = buffer_create(64, buffer_grow, 1);
 buffer_write(_b, buffer_u8, CoopCmd.HELLO);
 buffer_write(_b, buffer_u8, global.coopProtocol);
 buffer_write(_b, buffer_string, global.coopVersion);
+// The name travels in the handshake (M3.1) rather than in a packet of its own: it is
+// needed before the first puppet is drawn, and the handshake is already the one
+// moment both sides are guaranteed to exchange. Appended after the version so the
+// field order is `protocol, modVersion, name` (see docs/PROTOCOL.md).
+buffer_write(_b, buffer_string, global.coopName);
 CoopSend(_b);
-Trace("Co-op: sent HELLO (protocol " + string(global.coopProtocol) + ").");
+Trace("Co-op: sent HELLO (protocol " + string(global.coopProtocol) + ", name "
+      + global.coopName + ").");
 
 #define CoopSendWelcome()
 var _b = buffer_create(64, buffer_grow, 1);
 buffer_write(_b, buffer_u8, CoopCmd.WELCOME);
 buffer_write(_b, buffer_u8, global.coopProtocol);
 buffer_write(_b, buffer_string, global.coopVersion);
+// See CoopSendHello: the name rides the handshake, same field order.
+buffer_write(_b, buffer_string, global.coopName);
 CoopSend(_b);
 
 #define CoopSendReject(_reason)
@@ -1494,7 +1503,9 @@ switch (_cmd) {
     case CoopCmd.HELLO:
         var _p = buffer_read(_buf, buffer_u8);
         var _v = buffer_read(_buf, buffer_string);
-        Trace("Co-op: HELLO from peer (protocol " + string(_p) + ", version " + _v + ").");
+        var _n = buffer_read(_buf, buffer_string);   // M3.1: the peer's chosen name
+        Trace("Co-op: HELLO from peer (protocol " + string(_p) + ", version " + _v
+              + ", name " + _n + ").");
         if (_p != global.coopProtocol) {
             CoopSendReject("protocol mismatch: host " + string(global.coopProtocol)
                            + ", peer " + string(_p));
@@ -1502,6 +1513,7 @@ switch (_cmd) {
             exit;
         }
         global.coopPeerVersion = _v;
+        global.coopPeerName    = _n;   // M3.1: shown over the puppet
         global.coopPeerAlive   = true;
         CoopSendWelcome();
         CoopSendStructureTable();
@@ -1513,11 +1525,13 @@ switch (_cmd) {
     case CoopCmd.WELCOME:
         var _wp = buffer_read(_buf, buffer_u8);
         var _wv = buffer_read(_buf, buffer_string);
+        var _wn = buffer_read(_buf, buffer_string);   // M3.1: the host's chosen name
         global.coopPeerVersion = _wv;
+        global.coopPeerName    = _wn;   // M3.1: shown over the puppet
         global.coopPeerAlive   = true;
         CoopTraceStep("welc");   // diagnostic: this side is now in the session
         Trace("Co-op: WELCOME (protocol " + string(_wp) + ", version " + _wv
-              + ") - handshake complete.");
+              + ", name " + _wn + ") - handshake complete.");
         break;
 
     case CoopCmd.REJECT:

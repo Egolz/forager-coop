@@ -35,7 +35,10 @@ Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 $text = Get-Content $cliLog -Raw
 $want = @(
     "GM handshake complete (client side)",
-    "<- WELCOME protocol=4",
+    "<- WELCOME protocol=5",
+    # M3.1: the name rides the handshake, so a WELCOME that does not carry it is a failure -
+    # the field order slip this catches is exactly the one that cost M2.2 a whole evening.
+    "name='mock'",
     "<- PONG",
     "<- STRUCTURE_TABLE",
     "<- ITEM_TABLE",

@@ -45,8 +45,8 @@ Every payload starts with one `u8` command id. All integers little-endian. GameM
 
 | id | Name | Direction | Payload |
 |---|---|---|---|
-| 1 | `HELLO` | client → host | `u8 protocol`, `string modVersion` |
-| 2 | `WELCOME` | host → client | `u8 protocol`, `string modVersion` |
+| 1 | `HELLO` | client → host | `u8 protocol`, `string modVersion`, `string name` |
+| 2 | `WELCOME` | host → client | `u8 protocol`, `string modVersion`, `string name` |
 | 3 | `REJECT` | host → client | `string reason` |
 | 4 | `PING` | either | `u32 nonce` |
 | 5 | `PONG` | either | `u32 nonce` |
@@ -155,9 +155,12 @@ Notes:
 Notes:
 
 - **Version check.** The host refuses a peer whose `protocol` differs (it replies `REJECT`
-  and drops the socket). Protocol `4`, mod version `0.0.13-m2k` at the time of writing.
-  (`4` adds the M2.2 loot packets; `3` added `DEBUG_LINE`; `2` added the world-sync
-  packets; `1` was presence only.)
+  and drops the socket). Protocol `5`, mod version `0.0.34-m3a` at the time of writing.
+  (`5` adds the player name to `HELLO`/`WELCOME`; `4` added the M2.2 loot packets; `3` added
+  `DEBUG_LINE`; `2` added the world-sync packets; `1` was presence only.) The number moves when
+  the **wire format** moves, not when a feature is added: `5` grew a `string name` field into
+  two packets, and a peer still speaking `4` would read that name as the tail of the version
+  string and then read whatever followed it.
 - **Ping/pong.** One ping in flight at a time, every 90 steps (≈1.5 s at 60 fps). A ping
   that is not answered within 5 s marks the peer as gone. `PONG` echoes the nonce back.
 - **POS** is the one packet that is not host-authoritative: each player sends their own

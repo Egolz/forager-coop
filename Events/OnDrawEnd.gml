@@ -1,5 +1,5 @@
 #define OnDrawEnd
-// Forager Co-op - draws the remote player where they are.
+// Forager Co-op - draws the remote player and their name.
 //
 // Two earlier versions of this file were wrong about why the game crashed on leaving a world,
 // and both are worth keeping only as a warning.
@@ -15,33 +15,38 @@
 // What the address actually is was read afterwards with a disassembler, and reading it needed
 // no theory at all: `0x012c265f` is an RVA (not a file offset - an earlier pass got that
 // wrong by 0xc00 bytes and analysed the wrong instruction), and it lands on
-// `mov ecx, dword ptr [esi]` - the first field read of `this` inside an engine hash-map lookup
-// (`call` a hash of the key, mask by capacity-1, compare at `+8`, walk the chain at `+4`). It
-// faults because `this` is null or freed. It is called from six places, and none of them is
-// this file. **The crash is in the engine's own lookup, not in the mod's drawing.**
+// `mov ecx, dword ptr [esi]` - the first field read of `this` inside an engine hash-map lookup.
+// It faults because `this` is null or freed, and the cause is a socket left live during world
+// teardown, fixed in `OnStep`. **The crash is not in the mod's drawing at all.**
 //
-// So the rules this file follows are good rules that did not fix a crash:
-//   * **draw sprites, own no state.** `draw_sprite_ext` takes alpha per call and restores
-//     nothing, so it cannot leave the renderer in a state the game does not expect.
-//   * draw nothing when the required data is missing, rather than guessing.
-// Keeping it this way because it is correct and cheap, not because it cures anything.
+// So the rule this file follows is a good rule that did not fix a crash, and it has changed
+// shape: it is no longer "never touch draw state", it is **own no state** - set what a draw
+// needs, restore it, and never leave the renderer somewhere the game did not put it. The name
+// over the puppet's head needs horizontal centring and bottom alignment to sit above the
+// sprite, so this file sets `draw_set_halign` / `draw_set_valign` and puts them back to the
+// GameMaker defaults (`fa_left`, `fa_top`) on the way out. Restoring matters because the
+// game's own HUD text is drawn later in the same frame's pipeline and would otherwise inherit
+// our alignment.
+//
+// The sprite is the peer's own, taken from the `POS` packet (`global.coopPeer.sprite`), with the
+// host's own player sprite standing in when the peer sent none (the mock peer sends `sprite =
+// -1` and has no assets to send). The name comes from the handshake (`global.coopPeerName`,
+// M3.1) and falls back to "peer" until one arrives.
 
 if (!global.coopPeerAlive || !global.coopPeer.seen) exit;
 if (!instance_exists(objPlayer)) exit;
 if (objPlayer.room != global.coopPeer.room) exit;
 
-// The sprite to draw, and why there is a fallback.
-//
-// `POS` carries the sender's own `objPlayer.sprite_index`, so a real Forager peer always sends a
-// usable one. The **mock peer does not**: it has no access to the game's assets and sends
-// `sprite = -1`, and the first run of this file therefore drew nothing at all - the marker simply
-// vanished, which read as "the draw code is broken" when it was the packet that had no sprite in
-// it. Requiring a sprite from a peer that cannot supply one made a cosmetic dependency into a
-// hard one.
+// A sprite index the peer sent. `POS` carries the sender's own `objPlayer.sprite_index`, so a
+// real Forager peer always sends a usable one. The **mock peer does not**: it has no access to
+// the game's assets and sends `sprite = -1`, and the first run of this file therefore drew
+// nothing at all - the marker simply vanished, which read as "the draw code is broken" when it
+// was the packet that had no sprite in it. Requiring a sprite from a peer that cannot supply one
+// made a cosmetic dependency into a hard one.
 //
 // So the peer's sprite is used when it has one and the **host's own player sprite** stands in
 // when it does not. Falling back to a real sprite (rather than to a circle or a primitive) keeps
-// the rule this file exists for: draw sprites, own no state.
+// this file free of primitives, which is worth having anyway.
 var _spr = global.coopPeer.sprite;
 if (_spr <= 0) _spr = objPlayer.sprite_index;
 if (_spr <= 0) exit;
@@ -55,3 +60,17 @@ var _face = global.coopPeer.facing;
 if (_face == 0) _face = 1;
 
 draw_sprite_ext(_spr, 0, _x, _y - 30, _face, 1, 0, c_white, 0.85);
+
+// The name, centred over the puppet. `string_width` measures it so the text can be centred
+// **without** changing halign: with left alignment, starting at x minus half the width puts the
+// middle of the string on x. Both alignments are set to the GameMaker defaults first, because
+// the game's own HUD text is drawn in the same frame and would otherwise inherit whatever the
+// game's last draw left behind - and this file cannot read the previous value back, so the
+// defaults are the only honest thing to leave.
+var _name = global.coopPeerName;
+if (_name == "") _name = "peer";
+
+var _nw = string_width(_name);
+draw_set_halign(fa_left);
+draw_set_valign(fa_top);
+draw_text(_x - _nw / 2, _y - 46, _name);

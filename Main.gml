@@ -39,11 +39,19 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.33-m2af";
-global.coopProtocol = 4;   // 1 = presence only (M1); 2 adds the world-sync packets;
+global.coopVersion  = "0.0.34-m3a";
+global.coopProtocol = 5;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
-                           // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY)
-                           // (5 was used by a rejected CMD experiment and is free again)
+                           // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
+                           // 5 adds the player name to HELLO/WELCOME (M3.1)
+                           //
+                           // The number moves when the **wire format** moves, not when a
+                           // feature is added. 5 was free again after a rejected CMD
+                           // experiment, and M3.1 needed it: HELLO and WELCOME grew a
+                           // `string name` field, so a peer still speaking 4 would read our
+                           // name as the end of the version string and then read garbage
+                           // after it. A protocol number that survives a format change is
+                           // how a field-order bug survives a review.
 global.coopPort     = 6511;
 global.coopPlaceRange = 448;   // see Net.gml: how far a client may place from itself
 global.coopSolidRadius = 16;   // see Net.gml: how close counts as the same build-cell

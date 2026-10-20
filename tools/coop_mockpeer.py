@@ -17,8 +17,8 @@ verified by watching this game's server send the step-1 banner):
 
 Mod packets (little-endian; GameMaker buffer_string = UTF-8 + NUL):
 
-    1  HELLO            u8 protocol, string version
-    2  WELCOME          u8 protocol, string version
+    1  HELLO            u8 protocol, string version, string name
+    2  WELCOME          u8 protocol, string version, string name
     3  REJECT           string reason
     4  PING             u32 nonce
     5  PONG             u32 nonce
@@ -63,8 +63,12 @@ import sys
 import tempfile
 import time
 
-PROTOCOL = 4
-VERSION = "mockpeer-4"
+PROTOCOL = 5
+VERSION = "mockpeer-5"
+# The name the mock presents to the host (M3.1). ASCII on purpose: the host draws it with the
+# game's own font, and a non-ASCII name is exactly the kind of thing that renders as boxes if
+# the font lacks the glyphs.
+NAME = "mock"
 
 # GameMaker handshake / framing
 HANDSHAKE_SV0 = b"GM:Studio-Connect\x00"
@@ -132,11 +136,11 @@ def p_str(s: str) -> bytes:
 
 
 def hello() -> bytes:
-    return bytes([HELLO, PROTOCOL]) + p_str(VERSION)
+    return bytes([HELLO, PROTOCOL]) + p_str(VERSION) + p_str(NAME)
 
 
 def welcome() -> bytes:
-    return bytes([WELCOME, PROTOCOL]) + p_str(VERSION)
+    return bytes([WELCOME, PROTOCOL]) + p_str(VERSION) + p_str(NAME)
 
 
 def ping(nonce: int) -> bytes:
@@ -219,7 +223,16 @@ def parse_one(buf: bytes):
         if s is None:
             return None, 0
         ver, end = s
-        return {"cmd": cmd, "name": NAMES[cmd], "protocol": buf[1], "version": ver}, end
+        # M3.1: the name follows the version. A peer that does not send one (an older build)
+        # leaves nothing to read, so the field is optional on the wire and the mock reports
+        # an empty name rather than failing the parse.
+        nm = ""
+        if end < len(buf):
+            s2 = _read_str(buf, end)
+            if s2 is not None:
+                nm, end = s2
+        return {"cmd": cmd, "name": NAMES[cmd], "protocol": buf[1],
+                "version": ver, "peerName": nm}, end
     if cmd in (PING, PONG):
         if len(buf) < 5:
             return None, 0
@@ -339,7 +352,8 @@ def parse_one(buf: bytes):
 def describe(pkt: dict) -> str:
     name = pkt["name"]
     if name in ("HELLO", "WELCOME"):
-        return f"{name} protocol={pkt['protocol']} version={pkt['version']!r}"
+        return (f"{name} protocol={pkt['protocol']} version={pkt['version']!r} "
+                f"name={pkt.get('peerName', '')!r}")
     if name in ("PING", "PONG"):
         return f"{name} nonce={pkt['nonce']}"
     if name == "POS":

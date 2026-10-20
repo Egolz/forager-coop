@@ -35,10 +35,13 @@ Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 $text = Get-Content $cliLog -Raw
 $want = @(
     "GM handshake complete (client side)",
-    "<- WELCOME protocol=3",
+    "<- WELCOME protocol=4",
     "<- PONG",
     "<- STRUCTURE_TABLE",
     "<- ITEM_TABLE",
+    "<- DROP",
+    "<- PICKUP",
+    "<- RESOURCE_DESTROY",
     "<- DEBUG e2e: a debug line from the mock host",
     "-> INTENT_PLACE"
 )
@@ -50,6 +53,6 @@ if ($failed.Count -gt 0) {
     Write-Host "--- client log ---"; Get-Content $cliLog -Tail 20
     exit 1
 }
-Write-Host "e2e ok: handshake, welcome, pong, structure table, item table and INTENT_PLACE all seen"
+Write-Host "e2e ok: handshake, welcome, pong, structure table, item table, the three loot packets and INTENT_PLACE all seen"
 Write-Host "(logs in $log)"
 exit 0

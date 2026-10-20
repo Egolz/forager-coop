@@ -271,6 +271,120 @@ for (var _it_i = 0; _it_i < global.coopItemCount; _it_i++) {
 }
 CoopSend(_it_b);
 
+// ---------------------------------------------------------------------------
+// M2.2 - loot and resource sync.
+//
+// The shape matches placement: whoever sees a world change announces it, and the
+// **host** is the only one allowed to *apply* an announcement to its own world.
+//   host sees a drop   -> applies it locally (the game already did) and broadcasts
+//   client sees a drop -> announces it to the host, which applies and broadcasts
+// The re-entrancy guard coopApplyingLoot stops an applied change from being
+// announced again, exactly as coopApplyingRemote does for structures.
+//
+// Items travel as **ids**, because the F3 probe showed the names are localized and
+// ids are build constants (Item.Wood == 0, verified live 2026-10-20).
+// ---------------------------------------------------------------------------
+
+#define CoopDropAt(_x, _y, _item, _radius)
+// -> an existing dropped-item instance of that item within _radius of (_x,_y), or -1.
+//    A drop's own instance is what has to be removed when someone picks it up, and
+//    it is found the same way structures are: by walking the true instances, so a
+//    culled (offscreen) drop is found too. `parResource` is the parent, and the item
+//    is matched through the instance's own `item` field - the same field
+//    OnItemDrop() reads - so no name lookup is involved.
+var _da_res = -1;
+var _da_n   = TrueInstanceNumber(parResource);
+for (var _da_i = 0; _da_i < _da_n; _da_i++) {
+    var _da_inst = TrueInstanceFind(parResource, _da_i);
+    if (point_distance(_da_inst.x, _da_inst.y, _x, _y) > _radius) continue;
+    // `variable_instance_exists` is NOT in this build's symbol table (checked
+    // offline, count 0), so there is no runtime test for the field. The whole
+    // `parResource` family carries `item` - it is what OnItemDrop() hands out - so
+    // the field is read directly, the way PencilPal's own drop handler does.
+    if (_da_inst.item != _item) continue;
+    _da_res = _da_inst;
+    break;
+}
+return _da_res;
+
+#define CoopDropNear(_x, _y, _item, _radius)
+// A clearer name for the same walk, used by the pickup path where the exact tile is
+// unknown and only a radius around the picker is.
+return CoopDropAt(_x, _y, _item, _radius);
+
+#define CoopSendDrop(_x, _y, _item, _stack)
+// Announce an item that appeared in the world.
+var _dr_b = buffer_create(32, buffer_grow, 1);
+buffer_write(_dr_b, buffer_u8, CoopCmd.DROP);
+buffer_write(_dr_b, buffer_u8, objPlayer.room);
+buffer_write(_dr_b, buffer_s32, floor(_x));
+buffer_write(_dr_b, buffer_s32, floor(_y));
+buffer_write(_dr_b, buffer_u16, _item);
+buffer_write(_dr_b, buffer_u16, _stack);
+CoopSend(_dr_b);
+
+#define CoopSendPickup(_x, _y, _item)
+// Announce that an item left the world because someone took it.
+var _pu_b = buffer_create(32, buffer_grow, 1);
+buffer_write(_pu_b, buffer_u8, CoopCmd.PICKUP);
+buffer_write(_pu_b, buffer_u8, objPlayer.room);
+buffer_write(_pu_b, buffer_s32, floor(_x));
+buffer_write(_pu_b, buffer_s32, floor(_y));
+buffer_write(_pu_b, buffer_u16, _item);
+CoopSend(_pu_b);
+
+#define CoopSendResourceDestroy(_x, _y, _obj)
+// Announce that a resource (tree, rock, bush, ...) was harvested and is gone.
+// The object index travels, not a name: names are localized, object indices are not.
+var _rd_b = buffer_create(32, buffer_grow, 1);
+buffer_write(_rd_b, buffer_u8, CoopCmd.RESOURCE_DESTROY);
+buffer_write(_rd_b, buffer_u8, objPlayer.room);
+buffer_write(_rd_b, buffer_s32, floor(_x));
+buffer_write(_rd_b, buffer_s32, floor(_y));
+buffer_write(_rd_b, buffer_u16, _obj);
+CoopSend(_rd_b);
+
+#define CoopApplyDrop(_x, _y, _item, _stack)
+// Create a dropped item the peer told us about. DropItem is the game's own spawner
+// (documented, and PencilPal uses it to mirror a drop). Guarded so the spawn does
+// not bounce back out as our own announcement.
+var _ad_had = CoopDropAt(_x, _y, _item, 20);
+if (_ad_had >= 0) return -1;
+global.coopApplyingLoot = true;
+var _ad_new = DropItem(floor(_x), floor(_y), _item, _stack);
+global.coopApplyingLoot = false;
+global.coopLootDrops += 1;
+return _ad_new;
+
+#define CoopApplyPickup(_x, _y, _item)
+// Remove a dropped item the peer told us about. OnItemGet carries no tile - only
+// the item and how many - so the drop is located *near the position the picker
+// reported*, which is their own player. A radius of ~48 px covers the pickup reach
+// without reaching across to an unrelated pile on the same island.
+var _ap_inst = CoopDropNear(_x, _y, _item, 48);
+if (_ap_inst < 0) return 0;
+global.coopApplyingLoot = true;
+instance_destroy(_ap_inst, false);
+global.coopApplyingLoot = false;
+global.coopLootPicks += 1;
+return 1;
+
+#define CoopApplyResourceDestroy(_x, _y, _obj)
+// Destroy a harvested resource at the given tile. Object index rather than name, so
+// a localized build still matches. Walks true instances for the same reason drops do.
+var _ar_hits = 0;
+var _ar_n    = TrueInstanceNumber(_obj);
+for (var _ar_i = 0; _ar_i < _ar_n; _ar_i++) {
+    var _ar_inst = TrueInstanceFind(_obj, _ar_i);
+    if (floor(_ar_inst.x) != floor(_x) || floor(_ar_inst.y) != floor(_y)) continue;
+    global.coopApplyingLoot = true;
+    instance_destroy(_ar_inst, false);
+    global.coopApplyingLoot = false;
+    _ar_hits += 1;
+}
+if (_ar_hits > 0) global.coopLootBreaks += 1;
+return _ar_hits;
+
 #define CoopProbeItems()
 // F3. Read-only. Measures the item half of M2.2 before a single byte of loot sync
 // is written: how many items does this build have, do the ids we care about
@@ -1190,6 +1304,48 @@ switch (_cmd) {
                   + "arrive as the wrong item.");
         } else {
             Trace("Co-op: item ids agree on all anchors.");
+        }
+        break;
+
+    case CoopCmd.DROP:
+        // An item appeared in the world. The peer already has it (or, if we are the
+        // host, the world already spawned it) - we only mirror it.
+        var _dx   = buffer_read(_buf, buffer_s32);
+        var _dy   = buffer_read(_buf, buffer_s32);
+        var _drm  = buffer_read(_buf, buffer_u8);
+        var _dit  = buffer_read(_buf, buffer_u16);
+        var _dstk = buffer_read(_buf, buffer_u16);
+        if (instance_exists(objPlayer) && _drm != objPlayer.room) break;
+        var _dres = CoopApplyDrop(_dx, _dy, _dit, _dstk);
+        if (_dres >= 0) {
+            Trace("Co-op: <- drop item #" + string(_dit) + " x" + string(_dstk)
+                  + " at " + string(_dx) + "," + string(_dy)
+                  + " (" + CoopItemName(_dit) + ").");
+        }
+        break;
+
+    case CoopCmd.PICKUP:
+        var _px2  = buffer_read(_buf, buffer_s32);
+        var _py2  = buffer_read(_buf, buffer_s32);
+        var _prm  = buffer_read(_buf, buffer_u8);
+        var _pit  = buffer_read(_buf, buffer_u16);
+        if (instance_exists(objPlayer) && _prm != objPlayer.room) break;
+        if (CoopApplyPickup(_px2, _py2, _pit) > 0) {
+            Trace("Co-op: <- pickup item #" + string(_pit) + " at "
+                  + string(_px2) + "," + string(_py2) + ".");
+        }
+        break;
+
+    case CoopCmd.RESOURCE_DESTROY:
+        var _rx   = buffer_read(_buf, buffer_s32);
+        var _ry   = buffer_read(_buf, buffer_s32);
+        var _rrm  = buffer_read(_buf, buffer_u8);
+        var _robj = buffer_read(_buf, buffer_u16);
+        if (instance_exists(objPlayer) && _rrm != objPlayer.room) break;
+        var _rnumb = CoopApplyResourceDestroy(_rx, _ry, _robj);
+        if (_rnumb > 0) {
+            Trace("Co-op: <- resource destroyed obj#" + string(_robj) + " at "
+                  + string(_rx) + "," + string(_ry) + ".");
         }
         break;
 

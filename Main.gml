@@ -33,12 +33,16 @@ enum CoopCmd {
     STRUCTURE_TABLE  = 11,  // host -> client: the structure id/name list
     DEBUG_LINE       = 12,  // either way: one line of the sender's console
     // --- M2.2: resources and loot ---
-    ITEM_TABLE       = 13   // host -> client: the item id/name list (see NET protocol doc)
+    ITEM_TABLE       = 13,  // host -> client: the item id/name list
+    DROP             = 14,  // either way: an item appeared in the world
+    PICKUP           = 15,  // either way: an item left the world (picked up)
+    RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.12-m2j";
-global.coopProtocol = 3;   // 1 = presence only (M1); 2 adds the world-sync packets;
-                           // 3 adds DEBUG_LINE, the remote console
+global.coopVersion  = "0.0.13-m2k";
+global.coopProtocol = 4;   // 1 = presence only (M1); 2 adds the world-sync packets;
+                           // 3 adds DEBUG_LINE, the remote console; 4 adds the
+                           // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY)
 global.coopPort     = 6511;
 global.coopPlaceRange = 448;   // see Net.gml: how far a client may place from itself
 global.coopSolidRadius = 24;   // see Net.gml: how close counts as the same build-cell
@@ -84,6 +88,20 @@ global.coopStructObjects = [];  // id -> object index, e.g. objForge
 // on join and compared, exactly like the structure table.
 global.coopItemNames = [];      // id -> lowercase name from ItemGet(id, ItemData.Name)
 global.coopItemCount = 0;       // Item.Count at the time we last looked
+
+// ---------------------------------------------------------------------------
+// M2.2. Loot and resource sync. Same host-authoritative shape as placement: a
+// client never writes to the world, it asks.
+//
+// The wire carries item **ids** (Item.Wood == 0 etc., verified live by F3) - the
+// names are localized and stay in the logs. A drop is announced by the machine that
+// saw it; the *host* decides whether it counts. Keeping it simple on purpose: this
+// slice moves items and resource destruction, not HP or inventory totals.
+// ---------------------------------------------------------------------------
+global.coopApplyingLoot = false;   // re-entrancy guard, like coopApplyingRemote
+global.coopLootDrops     = 0;      // counters, for the status line
+global.coopLootPicks     = 0;
+global.coopLootBreaks    = 0;
 
 Trace("Forager Co-op " + global.coopVersion + " loaded (protocol "
       + string(global.coopProtocol) + ", port " + string(global.coopPort) + ").");

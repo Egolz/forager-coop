@@ -66,6 +66,14 @@ with a confirmed mutation. See the model in the hub's `games/forager/DESIGN.md`.
 | 11 | `STRUCTURE_TABLE` | host → client | `u16 count`, `{ u16 id, string name } × count` |
 | 12 | `DEBUG_LINE` | either way | `string text` |
 | 13 | `ITEM_TABLE` | host → client | `u16 count`, `{ u16 id, string name } × count` |
+| 14 | `DROP` | either way | `u8 room`, `s32 x`, `s32 y`, `u16 item`, `u16 stack` |
+| 15 | `PICKUP` | either way | `u8 room`, `s32 x`, `s32 y`, `u16 item` |
+| 16 | `RESOURCE_DESTROY` | either way | `u8 room`, `s32 x`, `s32 y`, `u16 objectIndex` |
+
+Packets 14-16 are M2.2 (resources and loot). The direction is "either way" because
+either machine can be the one that saw the change; the **host** is the one that
+applies it to its own world, and a client's copy is its own prediction. See the loot
+note below.
 
 Notes:
 
@@ -105,6 +113,20 @@ Notes:
   carry an **item id**, so the ids have to mean the same thing on both installs. A shifted
   database would turn "wood" into "stone" silently - this packet makes it loud instead.
   Unlike the structure table it is **not** pruned: an item row always has a name.
+- **Loot and resources (14-16).** The three packets above are driven by the game's own
+  events, whose signatures the docs do **not** list - they were read off PencilPal, the one
+  mod known to run in this build: `OnItemDrop(d)` (an array of `{x, y, item, stack}`),
+  `OnItemGet(items, size)` (an item **id** and a count, with no position), and
+  `OnResourceDestroy(i)` (the instance being removed).
+  - Items travel as **ids**, never names: F3 (live 2026-10-20) showed the item names are
+    localized (`Item.Wood` reads back as `"Древесина"`), while `Item.Wood == 0`,
+    `Item.Stone == 1`, `Item.Coin == 111` are build constants.
+  - Resources travel as an **object index** for the same reason.
+  - `PICKUP` carries no tile - the event does not have one - so the far end removes the
+    nearest dropped item of that id within ~48 px of the position the picker reported.
+  - This slice syncs the **world** only: an item that leaves the ground leaves it on both
+    machines, but it lands in the picker's own inventory and no inventory totals move
+    between players yet (that is M2.4).
 - `MUTATION_PLACE.depth` is informational. Forager y-sorts the world: an instance sits at
   `depth = -y` (probe, 2026-10-20: the player at y=656 had depth -656, and so did a
   hand-built furnace). The host's `OnStructureSpawn()` fires *before* the game sets that
@@ -115,8 +137,9 @@ Notes:
 Notes:
 
 - **Version check.** The host refuses a peer whose `protocol` differs (it replies `REJECT`
-  and drops the socket). Protocol `3`, mod version `0.0.5-m2c` at the time of writing.
-  (`3` adds `DEBUG_LINE`; `2` added the world-sync packets; `1` was presence only.)
+  and drops the socket). Protocol `4`, mod version `0.0.13-m2k` at the time of writing.
+  (`4` adds the M2.2 loot packets; `3` added `DEBUG_LINE`; `2` added the world-sync
+  packets; `1` was presence only.)
 - **Ping/pong.** One ping in flight at a time, every 90 steps (≈1.5 s at 60 fps). A ping
   that is not answered within 5 s marks the peer as gone. `PONG` echoes the nonce back.
 - **POS** is the one packet that is not host-authoritative: each player sends their own

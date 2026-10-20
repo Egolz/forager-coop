@@ -30,6 +30,9 @@ Mod packets (little-endian; GameMaker buffer_string = UTF-8 + NUL):
     11 STRUCTURE_TABLE  u16 count, { u16 id, string name } * count
     12 DEBUG_LINE       string text
     13 ITEM_TABLE       u16 count, { u16 id, string name } * count
+    14 DROP             u8 room, s32 x, s32 y, u16 item, u16 stack
+    15 PICKUP           u8 room, s32 x, s32 y, u16 item
+    16 RESOURCE_DESTROY u8 room, s32 x, s32 y, u16 objectIndex
 
 Usage (from the repo root, with the game running and the mod loaded):
 
@@ -60,8 +63,8 @@ import sys
 import tempfile
 import time
 
-PROTOCOL = 3
-VERSION = "mockpeer-3"
+PROTOCOL = 4
+VERSION = "mockpeer-4"
 
 # GameMaker handshake / framing
 HANDSHAKE_SV0 = b"GM:Studio-Connect\x00"
@@ -76,6 +79,7 @@ HELLO, WELCOME, REJECT, PING, PONG, POS, BYE = 1, 2, 3, 4, 5, 6, 7
 INTENT_PLACE, MUTATION_PLACE, INTENT_REJECTED, STRUCTURE_TABLE = 8, 9, 10, 11
 DEBUG_LINE = 12
 ITEM_TABLE = 13
+DROP, PICKUP, RESOURCE_DESTROY = 14, 15, 16
 
 NAMES = {
     HELLO: "HELLO", WELCOME: "WELCOME", REJECT: "REJECT",
@@ -83,6 +87,7 @@ NAMES = {
     INTENT_PLACE: "INTENT_PLACE", MUTATION_PLACE: "MUTATION_PLACE",
     INTENT_REJECTED: "INTENT_REJECTED", STRUCTURE_TABLE: "STRUCTURE_TABLE",
     DEBUG_LINE: "DEBUG_LINE", ITEM_TABLE: "ITEM_TABLE",
+    DROP: "DROP", PICKUP: "PICKUP", RESOURCE_DESTROY: "RESOURCE_DESTROY",
 }
 
 # structures to try to build if we are not told which one (first match wins)
@@ -172,6 +177,21 @@ def item_table(entries: list[tuple[int, str]]) -> bytes:
     for iid, name in entries:
         out += struct.pack("<H", iid) + p_str(name)
     return out
+
+
+def drop(room: int, x: int, y: int, item: int, stack: int) -> bytes:
+    """An item appeared in the world (packet 14)."""
+    return bytes([DROP]) + struct.pack("<BiiHH", room, x, y, item, stack)
+
+
+def pickup(room: int, x: int, y: int, item: int) -> bytes:
+    """An item left the world because someone took it (packet 15)."""
+    return bytes([PICKUP]) + struct.pack("<BiiH", room, x, y, item)
+
+
+def resource_destroy(room: int, x: int, y: int, obj: int) -> bytes:
+    """A resource was harvested and is gone (packet 16)."""
+    return bytes([RESOURCE_DESTROY]) + struct.pack("<BiiH", room, x, y, obj)
 
 
 def bye(reason: str) -> bytes:
@@ -283,6 +303,30 @@ def parse_one(buf: bytes):
             name, i = s
             items.append((iid, name))
         return {"cmd": cmd, "name": NAMES[cmd], "entries": items}, i
+    if cmd == DROP:
+        if len(buf) < 14:
+            return None, 0
+        room = buf[1]
+        x, y = struct.unpack("<ii", buf[2:10])
+        item, stack = struct.unpack("<HH", buf[10:14])
+        return {"cmd": cmd, "name": NAMES[cmd], "room": room, "x": x, "y": y,
+                "item": item, "stack": stack}, 14
+    if cmd == PICKUP:
+        if len(buf) < 12:
+            return None, 0
+        room = buf[1]
+        x, y = struct.unpack("<ii", buf[2:10])
+        (item,) = struct.unpack("<H", buf[10:12])
+        return {"cmd": cmd, "name": NAMES[cmd], "room": room, "x": x, "y": y,
+                "item": item}, 12
+    if cmd == RESOURCE_DESTROY:
+        if len(buf) < 12:
+            return None, 0
+        room = buf[1]
+        x, y = struct.unpack("<ii", buf[2:10])
+        (obj,) = struct.unpack("<H", buf[10:12])
+        return {"cmd": cmd, "name": NAMES[cmd], "room": room, "x": x, "y": y,
+                "object": obj}, 12
     if cmd == DEBUG_LINE:
         s = _read_str(buf, 1)
         if s is None:
@@ -314,6 +358,14 @@ def describe(pkt: dict) -> str:
         return f"STRUCTURE_TABLE {len(pkt['entries'])} entries"
     if name == "ITEM_TABLE":
         return f"ITEM_TABLE {len(pkt['entries'])} entries"
+    if name == "DROP":
+        return (f"DROP item #{pkt['item']} x{pkt['stack']} at {pkt['x']},{pkt['y']} "
+                f"room {pkt['room']}")
+    if name == "PICKUP":
+        return f"PICKUP item #{pkt['item']} at {pkt['x']},{pkt['y']} room {pkt['room']}"
+    if name == "RESOURCE_DESTROY":
+        return (f"RESOURCE_DESTROY obj#{pkt['object']} at {pkt['x']},{pkt['y']} "
+                f"room {pkt['room']}")
     if name == "DEBUG_LINE":
         return f"DEBUG {pkt['text']}"
     return f"{name} reason={pkt.get('reason')!r}"
@@ -345,6 +397,7 @@ class Peer:
         self.px, self.py = 620, 620 # where our own puppet currently is
         self.structs: list[tuple[int, str]] = []
         self.items: list[tuple[int, str]] = []
+        self.loot_seen: list[str] = []   # loot packets the host announced (M2.2)
         self.place_wanted = place   # None = auto, "" = do not ask
         self.place_index = place_index  # ask for this id from the host's table
         self.placed = False
@@ -484,6 +537,14 @@ class Peer:
             # real thing this is how the game's long dumps reach us.
             self.send(debug_line("e2e: a debug line from the mock host"))
             log("-> DEBUG_LINE")
+            # M2.2: the three loot packets, so packets 14-16 are exercised
+            # offline before a game speaks them (see PROTOCOL.md).
+            self.send(drop(8, 640, 704, 0, 3))
+            log("-> DROP item #0 x3 at 640,704")
+            self.send(pickup(8, 640, 704, 0))
+            log("-> PICKUP item #0 at 640,704")
+            self.send(resource_destroy(8, 512, 640, 5))
+            log("-> RESOURCE_DESTROY obj#5 at 512,640")
             self.handshaken = True
         elif name == "WELCOME" and not self.is_host:
             if pkt["protocol"] != PROTOCOL:
@@ -512,6 +573,20 @@ class Peer:
                 debug_note("item table: " + f"{len(self.items)} entries; "
                            + "head " + ", ".join(f"#{i}={n}" for i, n in first)
                            + "; tail " + ", ".join(f"#{i}={n}" for i, n in tail))
+        elif name in ("DROP", "PICKUP", "RESOURCE_DESTROY"):
+            # The host announced a world change. In the real thing a client mirrors
+            # it; here we only record it, which is enough to prove the packet
+            # reaches a peer and decodes (M2.2 offline coverage).
+            if name == "DROP":
+                log(f"   host loot: item #{pkt['item']} x{pkt['stack']} at "
+                    f"{pkt['x']},{pkt['y']} room {pkt['room']}")
+            elif name == "PICKUP":
+                log(f"   host loot: picked up item #{pkt['item']} at "
+                    f"{pkt['x']},{pkt['y']}")
+            else:
+                log(f"   host loot: resource obj#{pkt['object']} gone at "
+                    f"{pkt['x']},{pkt['y']}")
+            self.loot_seen.append(name)
         elif name == "PING":
             self.send(pong(pkt["nonce"]))
             log(f"-> PONG nonce={pkt['nonce']}")
@@ -715,6 +790,9 @@ def run_selftest() -> int:
     rej = bytes([INTENT_REJECTED]) + struct.pack("<I", 9) + p_str("too far")
     dbg = debug_line("probe: table #0 obj objForge isStruct=1")
     itm = item_table([(0, "wood"), (1, "stone"), (2, "coin")])
+    drp = drop(8, 640, 704, 0, 3)
+    pik = pickup(8, 640, 704, 0)
+    rds = resource_destroy(8, 512, 640, 5)
     for payload, name, checks in [
         (mut, "MUTATION_PLACE", {"seq": 12, "intentId": 9, "x": 640, "y": 704,
                                  "depth": -10, "structure": "forge"}),
@@ -722,6 +800,9 @@ def run_selftest() -> int:
         (rej, "INTENT_REJECTED", {"intentId": 9, "reason": "too far"}),
         (dbg, "DEBUG_LINE", {"text": "probe: table #0 obj objForge isStruct=1"}),
         (itm, "ITEM_TABLE", {"entries": [(0, "wood"), (1, "stone"), (2, "coin")]}),
+        (drp, "DROP", {"room": 8, "x": 640, "y": 704, "item": 0, "stack": 3}),
+        (pik, "PICKUP", {"room": 8, "x": 640, "y": 704, "item": 0}),
+        (rds, "RESOURCE_DESTROY", {"room": 8, "x": 512, "y": 640, "object": 5}),
     ]:
         try:
             pkt, used = parse_one(payload)
@@ -813,7 +894,7 @@ def run_selftest() -> int:
         for f in failures:
             log(f"FAIL {f}")
         return 1
-    log(f"selftest: {len(cases) + 5} packets encode/parse correctly, spot-retry ok")
+    log(f"selftest: {len(cases) + 8} packets encode/parse correctly, spot-retry ok")
     return 0
 
 

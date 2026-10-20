@@ -39,7 +39,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.13-m2k";
+global.coopVersion  = "0.0.14-m2l";
 global.coopProtocol = 4;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY)
@@ -102,6 +102,10 @@ global.coopApplyingLoot = false;   // re-entrancy guard, like coopApplyingRemote
 global.coopLootDrops     = 0;      // counters, for the status line
 global.coopLootPicks     = 0;
 global.coopLootBreaks    = 0;
+// Drops we just mirrored whose instance may not exist yet, so a duplicate
+// announcement arriving in the same tick is still recognised. Drained by
+// CoopTickPendingDrops() in OnStep; see CoopApplyDrop for why it is needed.
+global.coopDropsPending  = [];
 
 Trace("Forager Co-op " + global.coopVersion + " loaded (protocol "
       + string(global.coopProtocol) + ", port " + string(global.coopPort) + ").");

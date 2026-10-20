@@ -22,6 +22,17 @@ if (!global.coopPeerAlive) return;       // no one to tell
 if (!instance_exists(objPlayer)) return; // menus, logo rooms
 if (array_length(d) <= 0) return;
 
+// Live question left open by the first real harvest (2026-10-20, tree at 664,680):
+// the peer saw **two** byte-identical DROPs - same x, same y, same item, same
+// stack. That is either (a) one call carrying a two-entry array of two ground
+// items, or (b) the game calling this event once per dropped instance with a
+// one-entry array each time. The difference matters on the receiving side: (a) is
+// two piles that really exist and must both be mirrored, (b) is one pile reported
+// twice and must be deduped. The wire cannot tell them apart from the packets, so
+// the length is reported alongside each drop from now on.
+Trace("Co-op: OnItemDrop fired, " + string(array_length(d)) + " entr"
+      + (array_length(d) == 1 ? "y" : "ies") + ".");
+
 for (var _od_i = 0; _od_i < array_length(d); _od_i++) {
     var _od = array_get(d, _od_i);
 

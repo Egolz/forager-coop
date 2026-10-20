@@ -348,13 +348,68 @@ CoopSend(_rd_b);
 // Create a dropped item the peer told us about. DropItem is the game's own spawner
 // (documented, and PencilPal uses it to mirror a drop). Guarded so the spawn does
 // not bounce back out as our own announcement.
+//
+// Two layers of dedup, because the live harvest (2026-10-20) showed the peer sending
+// two byte-identical DROPs and we could not tell from the wire whether that was one
+// pile reported twice or two piles that both exist:
+//   1) the world is asked first - if a matching drop instance is already there,
+//      nothing is spawned;
+//   2) if not, a *pending* record is kept, so a second identical DROP arriving before
+//      DropItem() has materialised its instance is still recognised as the same pile.
+// The pending list is drained every step (CoopTickPendingDrops), so it never grows
+// without bound and an item genuinely dropped again later still lands.
 var _ad_had = CoopDropAt(_x, _y, _item, 20);
 if (_ad_had >= 0) return -1;
+if (CoopDropPending(_x, _y, _item, _stack)) return -1;
+CoopRememberDrop(_x, _y, _item, _stack);
 global.coopApplyingLoot = true;
 var _ad_new = DropItem(floor(_x), floor(_y), _item, _stack);
 global.coopApplyingLoot = false;
 global.coopLootDrops += 1;
 return _ad_new;
+
+#define CoopDropPending(_x, _y, _item, _stack)
+// -> true if an identical drop was already mirrored within the last few steps and its
+//    instance has not necessarily appeared yet. Entries are [_x, _y, _item, _stack, age].
+var _dp_fx = floor(_x);
+var _dp_fy = floor(_y);
+for (var _dp_i = 0; _dp_i < array_length(global.coopDropsPending); _dp_i++) {
+    var _dp_e = array_get(global.coopDropsPending, _dp_i);
+    if (array_get(_dp_e, 0) != _dp_fx) continue;
+    if (array_get(_dp_e, 1) != _dp_fy) continue;
+    if (array_get(_dp_e, 2) != _item) continue;
+    if (array_get(_dp_e, 3) != _stack) continue;
+    return true;
+}
+return false;
+
+#define CoopRememberDrop(_x, _y, _item, _stack)
+// Add a just-mirrored drop to the pending list. It is forgotten on the next few step
+// events (CoopTickPendingDrops), by which time the real instance exists and layer 1
+// takes over.
+array_push(global.coopDropsPending,
+           [floor(_x), floor(_y), _item, _stack, 0]);
+
+#define CoopTickPendingDrops()
+// Age the pending list and drop the entries older than a few steps. Called from
+// OnStep. Two steps is enough for DropItem() to create its instance (the game runs
+// the spawn on the step it is called), and short enough that a deliberate second drop
+// at the same tile a moment later is not swallowed.
+//
+// The entries are rebuilt rather than mutated through array_set(): a struct or array
+// fetched with array_get() may be a copy in this GML dialect, so writing into it and
+// expecting the stored one to change is exactly the kind of assumption that works
+// until it does not. Rebuilding is one line more and has no such trap.
+if (array_length(global.coopDropsPending) == 0) return;
+var _tp_keep = [];
+for (var _tp_i = 0; _tp_i < array_length(global.coopDropsPending); _tp_i++) {
+    var _tp_e   = array_get(global.coopDropsPending, _tp_i);
+    var _tp_age = array_get(_tp_e, 4) + 1;
+    if (_tp_age > 2) continue;
+    array_push(_tp_keep, [array_get(_tp_e, 0), array_get(_tp_e, 1),
+                          array_get(_tp_e, 2), array_get(_tp_e, 3), _tp_age]);
+}
+global.coopDropsPending = _tp_keep;
 
 #define CoopApplyPickup(_x, _y, _item)
 // Remove a dropped item the peer told us about. OnItemGet carries no tile - only

@@ -17,6 +17,10 @@ if (!global.coopPeerAlive) exit;
 
 global.coopTick += 1;
 
+// Drops we mirrored in the last couple of ticks: age them so the duplicate-DROP
+// guard does not remember a pile forever (see CoopApplyDrop / CoopTickPendingDrops).
+CoopTickPendingDrops();
+
 // heartbeat: keep at most one ping in flight
 if (global.coopTick mod 90 == 0 && global.coopPingSentAt < 0) {
     CoopSendPing();

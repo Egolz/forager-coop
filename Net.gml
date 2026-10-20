@@ -12,6 +12,23 @@ if (_sock < 0) {
 network_send_packet(_sock, _buf, buffer_tell(_buf));
 buffer_delete(_buf);
 
+#define CoopTraceStep(_token)
+// One token for the packet-corpus diagnostic (see Main.gml). Sender side only, no wire
+// change and no reply, which is why it works at all: DebugLine cannot fail an assertion
+// because nothing ever confirms it arrived. Marked dirty instead of sent here, because
+// sending from an arbitrary event while a packet is being parsed invites exactly the kind
+// of re-entrancy this mod has already been bitten by.
+array_push(global.coopTrace, _token);
+if (array_length(global.coopTrace) > 24) {
+    // This build has no array_delete(), so the ring is rebuilt without its oldest half.
+    var _ct_keep = [];
+    for (var _ct_i = 12; _ct_i < array_length(global.coopTrace); _ct_i += 1) {
+        array_push(_ct_keep, global.coopTrace[_ct_i]);
+    }
+    global.coopTrace = _ct_keep;
+}
+global.coopTraceDirty = true;
+
 #define CoopSendDebugLine(_text)
 // Sends one line of our console to the peer, which writes it down.
 //
@@ -337,6 +354,24 @@ CoopSend(_it_b);
 //
 // Items travel as **ids**, because the F3 probe showed the names are localized and
 // ids are build constants (Item.Wood == 0, verified live 2026-10-20).
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Diagnostics (temporary, native crash of 2026-10-20). Two of them:
+//
+//   `global.coopPhase`  - *when* the game died. Set right before each operation that
+//                         could fault, announced on change (OnStep), so the last number
+//                         the peer holds names the operation the game was inside.
+//   `global.coopTrace`  - *what it had last done*. A short ring of operation tokens, sent
+//                         as a corpus whenever one is added. The phase alone cannot tell
+//                         "it died before the placement" from "it died after": a corpus
+//                         that ends `... pos place` and one that ends `... pos place ok:pos`
+//                         say different things about where the fault is, and the game
+//                         leaves no other record (a native fault never reaches error.log).
+//
+// Neither changes the wire: tokens are plain DEBUG_LINEs, and the corpus is sent by the
+// sender about itself - nothing is asked of the peer, so the diagnostic cannot fail the
+// way an outstanding-request scheme could when the peer is a test tool.
 // ---------------------------------------------------------------------------
 
 #define CoopPlantStillExists(_obj, _x, _y)
@@ -1224,6 +1259,7 @@ Trace("--------------------");
 #define CoopHandleData(_buf)
 var _cmd = buffer_read(_buf, buffer_u8);
 global.coopPhase = 20 + _cmd;   // diagnostic: which packet we are acting on (21..36)
+CoopTraceStep("pkt" + string(_cmd));   // diagnostic: the corpus's receipt half
 
 switch (_cmd) {
     case CoopCmd.HELLO:
@@ -1250,12 +1286,14 @@ switch (_cmd) {
         var _wv = buffer_read(_buf, buffer_string);
         global.coopPeerVersion = _wv;
         global.coopPeerAlive   = true;
+        CoopTraceStep("welc");   // diagnostic: this side is now in the session
         Trace("Co-op: WELCOME (protocol " + string(_wp) + ", version " + _wv
               + ") - handshake complete.");
         break;
 
     case CoopCmd.REJECT:
         var _why = buffer_read(_buf, buffer_string);
+        CoopTraceStep("rej");    // diagnostic: conclude the corpus on a refusal too
         Trace("Co-op: host rejected us - " + _why);
         CoopDisconnect("rejected");
         break;
@@ -1271,6 +1309,8 @@ switch (_cmd) {
         break;
 
     case CoopCmd.POS:
+        CoopTraceStep("gotpos");
+        global.coopPhase = 26;   // diagnostic: the POS case has no observable tail of its own
         global.coopPeer.x      = buffer_read(_buf, buffer_s32);
         global.coopPeer.y      = buffer_read(_buf, buffer_s32);
         global.coopPeer.angle  = buffer_read(_buf, buffer_u16);
@@ -1279,6 +1319,7 @@ switch (_cmd) {
         global.coopPeer.image  = buffer_read(_buf, buffer_u8);
         global.coopPeer.room   = buffer_read(_buf, buffer_u8);
         global.coopPeer.seen   = true;
+        CoopTraceStep("pos");
         break;
 
     case CoopCmd.BYE:
@@ -1361,21 +1402,39 @@ switch (_cmd) {
         // `WaterCollision(716,630) = 0` compiled and ran, so the wrapper path was
         // never needed). Non-zero means water, so the intent is refused.
         //
-        // **The whole footprint has to be asked, not its centre.** A furnace is 2x2 cells
-        // (~48x48 px at the game's 24 px build-cell), so a single call at (_ix,_iy) only
-        // clears the one cell the structure is centred on and lets an edge hang over water -
-        // reported live 2026-10-20 ("can place a furnace with 1-3 tiles of water under it").
-        // The probe on OnStructureSpawn settles where the centre sits inside the footprint;
-        // until that reading lands, ask the **four cell centres of the 2x2 block** around the
-        // requested point, which covers the footprint for any centre convention (corner,
-        // centre of a cell, or centre of the block).
+        // **The whole footprint has to be asked, and at the right distance.** A furnace is
+        // 2x2 cells (~48x48 px at the game's 24 px build-cell), so a single call at (_ix,_iy)
+        // only clears the one cell the structure is centred on and lets an edge hang over
+        // water - reported live 2026-10-20 ("can place a furnace with 1-3 tiles of water
+        // under it"). The first fix for that asked four points at +/-12 px and was **still
+        // wrong**, which the live run of 2026-10-20 19:16 proved in the only way that counts:
+        //
+        //   -> INTENT_PLACE 'печь' at 672,672   <- the known-free cell on land
+        //   <- INTENT_REJECTED #28032: 'that spot is already occupied (1 of 4 tiles)'
+        //
+        // +/-12 px from a grid point lands on the **shared corner of four tiles** - the one
+        // place in a 24 px grid where "which tile is this?" has no answer, and the game's
+        // tile test evidently resolves the ambiguity differently from the way its own
+        // builder does. The four points that really cover a 2x2 block are its four *cell*
+        // centres, 24 px out from the grid point along each axis:
+        //
+        //       (_ix-24,_iy-24) (_ix+24,_iy-24)
+        //       (_ix-24,_iy+24) (_ix+24,_iy+24)
+        //
+        // which is what global.coopFootprint now holds. A 2x2 structure asked at six
+        // neighbours of the player was refused *six times out of six* with this bug - every
+        // one of them a false "occupied", so the mock found no legal ground anywhere and
+        // never placed its furnace. That is the reported symptom, and it was the check, not
+        // the placement.
         var _wq_water = 0;
         for (var _wq_dx = -1; _wq_dx <= 1; _wq_dx += 2) {
             for (var _wq_dy = -1; _wq_dy <= 1; _wq_dy += 2) {
-                if (WaterCollision(_ix + _wq_dx * 12, _iy + _wq_dy * 12) != 0) _wq_water += 1;
+                if (WaterCollision(_ix + _wq_dx * global.coopFootprint,
+                                   _iy + _wq_dy * global.coopFootprint) != 0) _wq_water += 1;
             }
         }
         if (_wq_water > 0) {
+            CoopTraceStep("watrej");
             CoopSendIntentRejected(_iid, "that spot is on water ("
                                    + string(_wq_water) + " of 4 tiles)");
             Trace("Co-op: refused intent #" + string(_iid) + " - water on "
@@ -1388,17 +1447,32 @@ switch (_cmd) {
         // "something is already standing here", measured against parSolid, the one
         // ancestor trees, rocks and buildings share (F12, live 2026-10-20).
         //
-        // Checked at the same **four cell centres** as the water test, for the same reason:
-        // a 2x2 structure touches four cells, and only asking the centre would let it be
-        // dropped half onto a tree. The check is a 24 px radius around each cell centre, so
-        // a solid in any of the four cells is caught.
+        // Checked at the same four **cell centres** as the water test, for the same reason,
+        // and with the same +/-12 px mistake corrected: the radius below already covers a
+        // full 24 px cell, so sampling on a tile corner used to make one solid count as a
+        // hit in **all four** cells at once - "occupied (4 of 4 tiles)" for a single tree,
+        // live 2026-10-20. That is why the refusals read (4 of 4) so often: it was one
+        // instance, counted four times.
+        //
+        // The player is excluded from this test on purpose. The spot is asked for *next to*
+        // the requester, and the requester's own body is the nearest living thing to it, so
+        // counting it would refuse every placement a player tries to make beside themselves.
+        // It was never a real rule - the first live run (2026-10-20) placed a structure
+        // exactly under the host at offset (0,0), and the owner rejected that shape: the
+        // rule is meant to stop building *on* something, not building *near* someone.
+        //
+        // Where the player is still checked is the **host's own** cell: an intent that
+        // would put a structure on top of the host is refused here, and a client cannot
+        // build on the peer it is standing on. That asymmetry is deliberate and small.
         var _oq_solid = 0;
         for (var _oq_dx = -1; _oq_dx <= 1; _oq_dx += 2) {
             for (var _oq_dy = -1; _oq_dy <= 1; _oq_dy += 2) {
-                if (CoopSolidNear(_ix + _oq_dx * 12, _iy + _oq_dy * 12) > 0) _oq_solid += 1;
+                if (CoopSolidNear(_ix + _oq_dx * global.coopFootprint,
+                                  _iy + _oq_dy * global.coopFootprint) > 0) _oq_solid += 1;
             }
         }
         if (_oq_solid > 0) {
+            CoopTraceStep("occ");
             CoopSendIntentRejected(_iid, "that spot is already occupied ("
                                    + string(_oq_solid) + " of 4 tiles)");
             Trace("Co-op: refused intent #" + string(_iid) + " - solid on "
@@ -1407,12 +1481,14 @@ switch (_cmd) {
             break;
         }
 
+        CoopTraceStep("place");
         var _placed = CoopCreateStructure(_sid, _ix, _iy, CoopStructDepth(_iy));
         if (_placed < 0) {
             CoopSendIntentRejected(_iid, "the host could not create it");
             break;
         }
         CoopSendMutationPlace(_iid, _placed.x, _placed.y, _placed.depth, _iname);
+        CoopTraceStep("placed");
         Trace("Co-op: applied intent #" + string(_iid) + " as seq " + string(global.coopSeq) + ".");
         break;
 
@@ -1427,6 +1503,7 @@ switch (_cmd) {
         var _mname = buffer_read(_buf, buffer_string);
 
         if (_seq <= global.coopSeq) {
+            CoopTraceStep("stale");
             Trace("Co-op: ignoring stale mutation seq " + string(_seq)
                   + " (we are already at " + string(global.coopSeq) + ").");
             break;
@@ -1434,12 +1511,14 @@ switch (_cmd) {
         global.coopSeq = _seq;
         CoopForgetPending(_miid);
         if (instance_exists(objPlayer) && _mroom != objPlayer.room) {
+            CoopTraceStep("mroom");
             Trace("Co-op: mutation seq " + string(_seq) + " belongs to room " + string(_mroom)
                   + ", we are in " + string(objPlayer.room) + " - not created here.");
             break;
         }
         var _msid = CoopFindStructure(_mname);
         if (_msid < 0) {
+            CoopTraceStep("mname");
             Trace("Co-op: mutation names an unknown structure '" + _mname + "' - ignored.");
             break;
         }
@@ -1447,7 +1526,9 @@ switch (_cmd) {
         // OnStructureSpawn() fires before the game sets a depth (the mutation
         // went out with 0 for an instance that really sat at -656), and depth is
         // a pure function of y anyway, so both ends derive the same value.
+        CoopTraceStep("mplace");
         CoopCreateStructure(_msid, _mx, _my, CoopStructDepth(_my));
+        CoopTraceStep("mplacesdone");
         Trace("Co-op: <- mutation seq " + string(_seq) + " '" + _mname + "' at "
               + string(_mx) + "," + string(_my) + ".");
         break;

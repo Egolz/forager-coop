@@ -39,13 +39,20 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.28-m2z";
+global.coopVersion  = "0.0.29-m2aa";
 global.coopProtocol = 4;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY)
+                           // (5 was used by a rejected CMD experiment and is free again)
 global.coopPort     = 6511;
 global.coopPlaceRange = 448;   // see Net.gml: how far a client may place from itself
 global.coopSolidRadius = 24;   // see Net.gml: how close counts as the same build-cell
+// How much room a built thing needs. A 2x2 structure occupies a 48x48 block of the
+// 24 px build grid, so its cell centres sit 24 px out from the point the game handed
+// us - not 12. See the water and occupancy checks in CoopHandleData, which used 12 px
+// and therefore only ever sampled *inside* what the live probe now shows is a 4x4 tile
+// structure sitting on a 24 px grid.
+global.coopFootprint   = 24;
 global.coopSolidObj    = -2;   // -2 = not resolved yet, -1 = no parSolid in this build
 global.coopLivingObjs  = [];   // player/NPC/enemy/pet object indices, resolved lazily
 
@@ -97,8 +104,18 @@ global.coopRxCount     = 0;
 // never reaches error.log, the last value to arrive is the only record of where the game
 // died. Set - never reset - right before each operation that could fault.
 global.coopPhase       = 0;
-
-// ---------------------------------------------------------------------------
+global.coopPhaseSent   = -1;   // diagnostic: the phase the peer was last told about
+global.coopPhaseAge    = 0;    // diagnostic: frames since the phase last changed
+// Diagnostic (packet corpus, 2026-10-20). The phase marker above names *when* the game
+// died; this names *what it had last done*. Every completed operation appends one short
+// token here and the whole ring goes out when a new one arrives, so the last corpus the
+// peer holds reads like a black box flight recorder: "pos pos pos place water-refused
+// ok:pos" says the sender was healthy *after* the placement, and a corpus that stops
+// right after `place` says the fault was in applying it. Sender-side only - no wire
+// change, no reply, so it also fills the hole left by DebugLine being fire-and-forget.
+// Capped by rebuilding without its oldest half, because this build has no array_delete.
+global.coopTrace       = [];
+global.coopTraceDirty  = false;// ---------------------------------------------------------------------------
 // M2: host-authoritative world state.
 // The host owns the world. A client never writes to it: it asks (an "intent"),
 // the host decides, applies the change itself and broadcasts it with a

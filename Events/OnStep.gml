@@ -30,17 +30,45 @@ if (!instance_exists(objPlayer)) exit;
 
 global.coopTick += 1;
 
-// Diagnostic, temporary (leave-world crash, 2026-10-20): one line every ~5 seconds (300 ticks
-// at 60 fps), reporting how many packets this side has handled and whether the world is
-// alive. Deliberately low-volume: an earlier diagnostic here fired **every frame** (its
-// counter sat before the increment, so the modulo condition never stopped being true), which
-// flooded the socket with hundreds of packets a second - a self-inflicted load that had to be
-// ruled out before any other reading could be trusted.
+// Diagnostic, temporary (native crash, 2026-10-20). The fault leaves no log, so the only
+// record of where the game died is what the peer already received. Reporting the phase on a
+// timer turned out to be too coarse: the last test announced `phase 10` every five seconds
+// while the game ran, and a phase that is *set* rather than *reset* says nothing about the
+// moment in between. So this reports it **on change** as well, rate-limited to avoid the
+// flood an earlier version of this diagnostic caused (comments above are the record of that
+// mistake - a counter sitting before its own increment fired every frame).
+//
+// `phaseAge` counts frames since the last change, so a phase that never changes is visible
+// too: a frozen phase with a growing age means the game is stuck *inside* that operation,
+// which is a different and much more specific finding than "it was somewhere in OnStep".
+if (global.coopPhase != global.coopPhaseSent) {
+    CoopSendDebugLine("probe phase " + string(global.coopPhase)
+                      + " at tick " + string(global.coopTick)
+                      + " rx " + string(global.coopRxCount));
+    global.coopPhaseSent = global.coopPhase;
+    global.coopPhaseAge  = 0;
+} else {
+    global.coopPhaseAge += 1;
+}
 if (global.coopTick mod 300 == 0) {
     CoopSendDebugLine("probe tick " + string(global.coopTick)
                       + " rx " + string(global.coopRxCount)
                       + " phase " + string(global.coopPhase)
+                      + " age " + string(global.coopPhaseAge)
                       + " player " + string(instance_exists(objPlayer)));
+}
+
+// Packet corpus: the whole recent operation ring goes out whenever a new token was added.
+// This is the flight recorder the phase marker is not - see the diagnostics block in
+// Net.gml. It rides the once-per-frame OnStep rather than being sent where the token was
+// added, so a send can never happen in the middle of parsing a packet.
+if (global.coopTraceDirty) {
+    global.coopTraceDirty = false;
+    var _ct_line = "corpus";
+    for (var _ct_j = 0; _ct_j < array_length(global.coopTrace); _ct_j += 1) {
+        _ct_line += " " + global.coopTrace[_ct_j];
+    }
+    CoopSendDebugLine(_ct_line);
 }
 
 // Phase markers for the native crash. The fault kills the process without reaching
@@ -66,7 +94,9 @@ if (global.coopPingSentAt >= 0 && current_time - global.coopPingSentAt > 5000) {
 // presence: ~20 packets/second, cosmetic and latency-sensitive
 if (global.coopTick mod 3 == 0) {
     global.coopPhase = 13;   // sending our position
+    CoopTraceStep("sndpos");   // diagnostic: the corpus's send half
     CoopSendPos();
+    CoopTraceStep("spos");
 }
 
 // ============================================================================
@@ -204,4 +234,6 @@ if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
     global.coopBushIds   = _now_id;
     global.coopBushXs    = _now_x;
     global.coopBushYs    = _now_y;
+    global.coopPhase = 14;   // diagnostic: the plant walk finished without faulting
+    CoopTraceStep("plants");
 }

@@ -12,23 +12,6 @@ if (_sock < 0) {
 network_send_packet(_sock, _buf, buffer_tell(_buf));
 buffer_delete(_buf);
 
-#define CoopTraceStep(_token)
-// One token for the packet-corpus diagnostic (see Main.gml). Sender side only, no wire
-// change and no reply, which is why it works at all: DebugLine cannot fail an assertion
-// because nothing ever confirms it arrived. Marked dirty instead of sent here, because
-// sending from an arbitrary event while a packet is being parsed invites exactly the kind
-// of re-entrancy this mod has already been bitten by.
-array_push(global.coopTrace, _token);
-if (array_length(global.coopTrace) > 24) {
-    // This build has no array_delete(), so the ring is rebuilt without its oldest half.
-    var _ct_keep = [];
-    for (var _ct_i = 12; _ct_i < array_length(global.coopTrace); _ct_i += 1) {
-        array_push(_ct_keep, global.coopTrace[_ct_i]);
-    }
-    global.coopTrace = _ct_keep;
-}
-global.coopTraceDirty = true;
-
 #define CoopSendDebugLine(_text)
 // Sends one line of our console to the peer, which writes it down.
 //
@@ -509,21 +492,6 @@ CoopSend(_it_b);
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Diagnostics (temporary, native crash of 2026-10-20). Two of them:
-//
-//   `global.coopPhase`  - *when* the game died. Set right before each operation that
-//                         could fault, announced on change (OnStep), so the last number
-//                         the peer holds names the operation the game was inside.
-//   `global.coopTrace`  - *what it had last done*. A short ring of operation tokens, sent
-//                         as a corpus whenever one is added. The phase alone cannot tell
-//                         "it died before the placement" from "it died after": a corpus
-//                         that ends `... pos place` and one that ends `... pos place ok:pos`
-//                         say different things about where the fault is, and the game
-//                         leaves no other record (a native fault never reaches error.log).
-//
-// Neither changes the wire: tokens are plain DEBUG_LINEs, and the corpus is sent by the
-// sender about itself - nothing is asked of the peer, so the diagnostic cannot fail the
-// way an outstanding-request scheme could when the peer is a test tool.
 // ---------------------------------------------------------------------------
 
 #define CoopPlantStillExists(_obj, _x, _y)
@@ -830,16 +798,6 @@ if (global.coopSolidObj == -2) {
         if (_sld_fo >= 0) array_push(global.coopSolidObjs, _sld_fo);
     }
     global.coopSolidObj = 0;   // marker: resolved (0 is never a valid object index)
-    // One line, once, so the next live run confirms this on the spot instead of relying on
-    // an offline read of data.win: the family list, and parSolid's own (expected zero) count.
-    if (global.coopPeerAlive) {
-        var _sld_par = asset_get_index("parSolid");
-        CoopSendDebugLine("probe solids: watching "
-                          + string(array_length(global.coopSolidObjs)) + " families "
-                          + string(global.coopSolidObjs)
-                          + " (parSolid itself has "
-                          + string(_sld_par >= 0 ? instance_number(_sld_par) : -1) + " instances)");
-    }
 }
 if (global.coopLivingObjs == undefined) global.coopLivingObjs = [];
 if (array_length(global.coopLivingObjs) == 0) {
@@ -1099,143 +1057,6 @@ for (var _ds_i = 0; _ds_i < _ds_n; _ds_i++) {
           + "  (" + _ds_txt + " isStruct=" + _ds_anc + ")");
 }
 Trace("---");
-
-#define CoopProbeGrid()
-// F4. Read-only. **What is the world's own grid, and where is a structure pinned to it?**
-//
-// Why this exists rather than another reading of the same furnace. The build-cell of 24 px
-// was never measured - it was *inferred* from structure coordinates the mod itself had
-// created, and that is circular: the mod writes 24-multiples because the mod chose to, so
-// every sample "confirmed" the grid that produced it. The live run of 2026-10-20 19:19 broke
-// the circle by chance: a furnace the **owner** built by hand landed at 656,608, which is
-// `24*27+8, 24*25+8` - eight pixels off the grid the mod believes in, on both axes. That is
-// the "half a cell up" the owner reported, and it says the mod's 24 is wrong (or off by an
-// origin), not that the game misplaced anything.
-//
-// So this prints many samples instead of one, and prints them as **remainders**, because a
-// remainder is what a grid claim is. Read together, the columns say which cell size every
-// structure agrees on, and by how much that shared grid is offset:
-//
-//   * a column that is 0 for every row is the real cell size;
-//   * a column that is a constant non-zero for every row is the real cell size **plus that
-//     offset** - which is the case a single sample cannot distinguish from noise;
-//   * no such column means coordinates are sprite origins, and the next thing to measure is
-//     the sprite, not the world.
-//
-// It walks the game's own `parStructure` (the ground truth for "is this a building"), so it
-// samples every structure in the room, not just the kinds our table happens to know. Read-only:
-// nothing is created, moved or written.
-if (!instance_exists(objPlayer)) {
-    Trace("Co-op: F4 needs a loaded world.");
-    exit;
-}
-
-var _pg_lines = [];
-array_push(_pg_lines, "=== grid probe " + global.coopVersion + " ===");
-array_push(_pg_lines, "player " + string(floor(objPlayer.x)) + "," + string(floor(objPlayer.y))
-           + " depth " + string(objPlayer.depth)
-           + " mod8 " + string(objPlayer.x mod 8) + "," + string(objPlayer.y mod 8)
-           + " mod16 " + string(objPlayer.x mod 16) + "," + string(objPlayer.y mod 16));
-
-var _pg_par = asset_get_index("parStructure");
-if (_pg_par < 0) {
-    array_push(_pg_lines, "parStructure not in this build - nothing to sample");
-} else {
-    var _pg_n = instance_number(_pg_par);
-    array_push(_pg_lines, "parStructure #" + string(_pg_par) + " instances " + string(_pg_n));
-    // Remainders mod 8 / 12 / 16 / 24 for each, one row per structure. Those four cover every
-    // cell size the game could plausibly use (8 = half of 16, 12 = half of 24, 24 = the
-    // mod's guess, 16 = the only one that divides the tiles the map is drawn on).
-    for (var _pg_i = 0; _pg_i < _pg_n; _pg_i++) {
-        var _pg_s = instance_find(_pg_par, _pg_i);
-        array_push(_pg_lines,
-            "  " + object_get_name(_pg_s.object_index)
-            + " " + string(floor(_pg_s.x)) + "," + string(floor(_pg_s.y))
-            + " | mod8 "  + string(_pg_s.x mod 8)  + "," + string(_pg_s.y mod 8)
-            + " mod12 "  + string(_pg_s.x mod 12) + "," + string(_pg_s.y mod 12)
-            + " mod16 "  + string(_pg_s.x mod 16) + "," + string(_pg_s.y mod 16)
-            + " mod24 "  + string(_pg_s.x mod 24) + "," + string(_pg_s.y mod 24)
-            + " | depth " + string(_pg_s.depth));
-    }
-}
-
-// The same question for dropped items, which the game also places: an item origin and a
-// structure origin need not agree, and picking one cannot be assumed to hold for the other.
-var _pg_res = asset_get_index("parResource");
-if (_pg_res >= 0) {
-    var _pg_rn = instance_number(_pg_res);
-    var _pg_rl = _pg_rn;
-    if (_pg_rl > 16) _pg_rl = 16;
-    array_push(_pg_lines, "parResource instances " + string(_pg_rn) + " (first " + string(_pg_rl) + "):");
-    for (var _pg_ri = 0; _pg_ri < _pg_rl; _pg_ri++) {
-        var _pg_r = instance_find(_pg_res, _pg_ri);
-        array_push(_pg_lines,
-            "  " + object_get_name(_pg_r.object_index)
-            + " " + string(floor(_pg_r.x)) + "," + string(floor(_pg_r.y))
-            + " | mod8 "  + string(_pg_r.x mod 8)  + "," + string(_pg_r.y mod 8)
-            + " mod16 "  + string(_pg_r.x mod 16) + "," + string(_pg_r.y mod 16)
-            + " mod24 "  + string(_pg_r.x mod 24) + "," + string(_pg_r.y mod 24));
-    }
-}
-
-array_push(_pg_lines, "=== grid probe end ===");
-var _pg_m = array_length(_pg_lines);
-Trace("--- Co-op grid probe ---");
-for (var _pg_j = 0; _pg_j < _pg_m; _pg_j += 1) {
-    Trace("  " + _pg_lines[_pg_j]);
-    CoopSendDebugLine(_pg_lines[_pg_j]);
-}
-Trace("---");
-
-#define CoopProbeBody()
-// Which sprite is the player's body, really?
-//
-// The peer's `POS` packet carries the sender's `objPlayer.sprite_index`, and the live
-// measurement of 2026-10-21 says that value is **not a sprite index in this build**: it read
-// 0 on 19366 frames and 1 on 7354, while the game's sprites are numbered from about 1000
-// (a furnace reports 1097). It is a flag, not an asset - so a peer that sent it could not be
-// drawn, and the puppet that stood in for it blinked in and out.
-//
-// The real body sprite is somewhere in the world: an instance standing at the player's own
-// position, carrying a sprite index in the game's own numbering. This walks the object
-// indices around the player's and reports every instance near it with that instance's sprite
-// and image index, so the answer is a fact rather than a guess.
-//
-// Read-only: nothing is created, moved or written. Runs once per session, and needs no new
-// hotkey - the answer belongs in the log the owner is already reading.
-if (!instance_exists(objPlayer)) exit;
-
-var _pb_lines = [];
-array_push(_pb_lines, "=== body probe " + global.coopVersion + " ===");
-array_push(_pb_lines, "player object #" + string(objPlayer.object_index)
-           + " '" + object_get_name(objPlayer.object_index) + "'"
-           + " sprite " + string(objPlayer.sprite_index)
-           + " image " + string(objPlayer.image_index)
-           + " at " + string(floor(objPlayer.x)) + "," + string(floor(objPlayer.y)));
-
-var _pb_lo = objPlayer.object_index - 60;
-if (_pb_lo < 1) _pb_lo = 1;
-var _pb_hi = objPlayer.object_index + 60;
-for (var _pb_o = _pb_lo; _pb_o <= _pb_hi; _pb_o++) {
-    var _pb_n = instance_number(_pb_o);
-    if (_pb_n <= 0) continue;          // also skips object indices that do not exist
-    for (var _pb_i = 0; _pb_i < _pb_n; _pb_i++) {
-        var _pb_s = instance_find(_pb_o, _pb_i);
-        if (!instance_exists(_pb_s)) continue;
-        var _pb_d = point_distance(_pb_s.x, _pb_s.y, objPlayer.x, objPlayer.y);
-        if (_pb_d > 120) continue;
-        array_push(_pb_lines, "  #" + string(_pb_o) + " '" + object_get_name(_pb_o) + "'"
-                   + " sprite " + string(_pb_s.sprite_index)
-                   + " image " + string(_pb_s.image_index)
-                   + " at " + string(floor(_pb_s.x)) + "," + string(floor(_pb_s.y))
-                   + " d " + string(floor(_pb_d)));
-    }
-}
-array_push(_pb_lines, "=== body probe end ===");
-var _pb_m = array_length(_pb_lines);
-for (var _pb_j = 0; _pb_j < _pb_m; _pb_j += 1) {
-    CoopSendDebugLine(_pb_lines[_pb_j]);
-}
 
 #define CoopProbeWorld()
 // F10. Read-only. Dumps what the game thinks a structure is next to what our
@@ -1622,8 +1443,6 @@ Trace("--------------------");
 
 #define CoopHandleData(_buf)
 var _cmd = buffer_read(_buf, buffer_u8);
-global.coopPhase = 20 + _cmd;   // diagnostic: which packet we are acting on (21..36)
-CoopTraceStep("pkt" + string(_cmd));   // diagnostic: the corpus's receipt half
 
 switch (_cmd) {
     case CoopCmd.HELLO:
@@ -1655,14 +1474,12 @@ switch (_cmd) {
         global.coopPeerVersion = _wv;
         global.coopPeerName    = _wn;   // M3.1: shown over the puppet
         global.coopPeerAlive   = true;
-        CoopTraceStep("welc");   // diagnostic: this side is now in the session
         Trace("Co-op: WELCOME (protocol " + string(_wp) + ", version " + _wv
               + ", name " + _wn + ") - handshake complete.");
         break;
 
     case CoopCmd.REJECT:
         var _why = buffer_read(_buf, buffer_string);
-        CoopTraceStep("rej");    // diagnostic: conclude the corpus on a refusal too
         Trace("Co-op: host rejected us - " + _why);
         CoopDisconnect("rejected");
         break;
@@ -1678,8 +1495,6 @@ switch (_cmd) {
         break;
 
     case CoopCmd.POS:
-        CoopTraceStep("gotpos");
-        global.coopPhase = 26;   // diagnostic: the POS case has no observable tail of its own
         global.coopPeer.x      = buffer_read(_buf, buffer_s32);
         global.coopPeer.y      = buffer_read(_buf, buffer_s32);
         global.coopPeer.angle  = buffer_read(_buf, buffer_u16);
@@ -1688,7 +1503,6 @@ switch (_cmd) {
         global.coopPeer.image  = buffer_read(_buf, buffer_u8);
         global.coopPeer.room   = buffer_read(_buf, buffer_u8);
         global.coopPeer.seen   = true;
-        CoopTraceStep("pos");
         break;
 
     case CoopCmd.BYE:
@@ -1795,7 +1609,6 @@ switch (_cmd) {
             }
         }
         if (_wq_water > 0) {
-            CoopTraceStep("watrej");
             CoopSendIntentRejected(_iid, "that spot is on water ("
                                    + string(_wq_water) + " of 4 tiles)");
             Trace("Co-op: refused intent #" + string(_iid) + " - water on "
@@ -1844,7 +1657,6 @@ switch (_cmd) {
             }
         }
         if (_oq_solid > 0) {
-            CoopTraceStep("occ");
             CoopSendIntentRejected(_iid, "that spot is already occupied ("
                                    + string(_oq_solid) + " of 4 tiles)");
             Trace("Co-op: refused intent #" + string(_iid) + " - solid on "
@@ -1853,14 +1665,12 @@ switch (_cmd) {
             break;
         }
 
-        CoopTraceStep("place");
         var _placed = CoopCreateStructure(_sid, _ix, _iy, CoopStructDepth(_iy));
         if (_placed < 0) {
             CoopSendIntentRejected(_iid, "the host could not create it");
             break;
         }
         CoopSendMutationPlace(_iid, _placed.x, _placed.y, _placed.depth, _iname);
-        CoopTraceStep("placed");
         Trace("Co-op: applied intent #" + string(_iid) + " as seq " + string(global.coopSeq) + ".");
         break;
 
@@ -1875,7 +1685,6 @@ switch (_cmd) {
         var _mname = buffer_read(_buf, buffer_string);
 
         if (_seq <= global.coopSeq) {
-            CoopTraceStep("stale");
             Trace("Co-op: ignoring stale mutation seq " + string(_seq)
                   + " (we are already at " + string(global.coopSeq) + ").");
             break;
@@ -1883,14 +1692,12 @@ switch (_cmd) {
         global.coopSeq = _seq;
         CoopForgetPending(_miid);
         if (instance_exists(objPlayer) && _mroom != objPlayer.room) {
-            CoopTraceStep("mroom");
             Trace("Co-op: mutation seq " + string(_seq) + " belongs to room " + string(_mroom)
                   + ", we are in " + string(objPlayer.room) + " - not created here.");
             break;
         }
         var _msid = CoopFindStructure(_mname);
         if (_msid < 0) {
-            CoopTraceStep("mname");
             Trace("Co-op: mutation names an unknown structure '" + _mname + "' - ignored.");
             break;
         }
@@ -1898,9 +1705,7 @@ switch (_cmd) {
         // OnStructureSpawn() fires before the game sets a depth (the mutation
         // went out with 0 for an instance that really sat at -656), and depth is
         // a pure function of y anyway, so both ends derive the same value.
-        CoopTraceStep("mplace");
         CoopCreateStructure(_msid, _mx, _my, CoopStructDepth(_my));
-        CoopTraceStep("mplacesdone");
         Trace("Co-op: <- mutation seq " + string(_seq) + " '" + _mname + "' at "
               + string(_mx) + "," + string(_my) + ".");
         break;

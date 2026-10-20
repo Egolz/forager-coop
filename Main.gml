@@ -1,6 +1,7 @@
 #define Main
 // ============================================================================
-// Forager Co-op - presence (M1) + host-authoritative structure placement (M2.1).
+// Forager Co-op - presence, host-authoritative world sync, and the visible second
+// player (M3.1).
 //
 // Design:  https://github.com/cranebeaker/coop-anything/tree/main/games/forager
 // Protocol: docs/PROTOCOL.md
@@ -14,7 +15,8 @@
 //
 // The hotkeys are the first free function keys in this build: F1-F2 are the game's
 // own help/console helpers and F4 is alt-F4-adjacent on some layouts, so the probes
-// start at F3 rather than at F1.
+// start at F3 rather than at F1. F4 was the build-grid probe until 2026-10-21 and
+// is free again.
 // Console for Trace output: the `t` key.
 // ============================================================================
 
@@ -39,7 +41,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.41-m3h";
+global.coopVersion  = "0.0.42-m3i";
 global.coopProtocol = 5;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -103,8 +105,6 @@ global.coopPeerVersion = "";
 // it arrives before the first puppet is ever drawn.
 global.coopName     = "player";  // what we call ourselves; see CoopLocalName below
 global.coopPeerName = "";        // what the peer called themselves ("peer" until known)
-// Diagnostic (M3.1): the last "probe peer" line, so the diagnostic only reports on change.
-global.coopPeerKey  = "";
 // M3.1: the body sprite is resolved by **name** (`sprPlayerIdle`), because the player's
 // instance reports `sprite_index` 0 - the live body probe of 2026-10-21 found the whole
 // instance chain (parEntity #20, objPlayer #22, parAlly #46) with a sprite index of 0, while
@@ -112,7 +112,6 @@ global.coopPeerKey  = "";
 // a property of the instance. See CoopResolveBodySprite.
 global.coopBodySprite = -1;
 global.coopBodyTried = false;
-global.coopBodyProbeDone = false;
 // Where the peer is actually drawn. The host decides, because the host is the side that
 // knows the world - a peer with no physics (the mock) reports a position inside a tree or in
 // the water, and the host pulls it onto ground a body could stand on.
@@ -120,10 +119,6 @@ global.coopStandX   = 0;
 global.coopStandY   = 0;
 global.coopStandKey = "";
 
-// Temporary: how many resource-spawn probe lines have gone out (see
-// Events/OnResourceSpawn.gml). Reset each session; the probe is removed when M2.2's
-// resource coverage is settled.
-global.coopSpawnProbe = 0;
 
 // Bush / pickable-plant sync state (see Events/OnStep.gml, "bush sync"). A bush is not a
 // resource in this game - its parent is `parHerb` - so no OnResourceDestroy arrives for it
@@ -146,14 +141,10 @@ global.coopTick        = 0;
 // the receive side was alive when the game died. It is what separated "the mod is stuck" from
 // "the game is gone" for the OnRoomLoad probes, and the same trick is what will say whether
 // the crash is tied to processing a packet. Remove with the rest of the diagnostics.
-global.coopRxCount     = 0;
 // Diagnostic (native crash, 2026-10-20): the number of the operation the game was last
 // inside. It is announced every ~5 s to the peer (see OnStep), and because a native fault
 // never reaches error.log, the last value to arrive is the only record of where the game
 // died. Set - never reset - right before each operation that could fault.
-global.coopPhase       = 0;
-global.coopPhaseSent   = -1;   // diagnostic: the phase the peer was last told about
-global.coopPhaseAge    = 0;    // diagnostic: frames since the phase last changed
 // Diagnostic (packet corpus, 2026-10-20). The phase marker above names *when* the game
 // died; this names *what it had last done*. Every completed operation appends one short
 // token here and the whole ring goes out when a new one arrives, so the last corpus the
@@ -162,8 +153,6 @@ global.coopPhaseAge    = 0;    // diagnostic: frames since the phase last change
 // right after `place` says the fault was in applying it. Sender-side only - no wire
 // change, no reply, so it also fills the hole left by DebugLine being fire-and-forget.
 // Capped by rebuilding without its oldest half, because this build has no array_delete.
-global.coopTrace       = [];
-global.coopTraceDirty  = false;// ---------------------------------------------------------------------------
 // M2: host-authoritative world state.
 // The host owns the world. A client never writes to it: it asks (an "intent"),
 // the host decides, applies the change itself and broadcasts it with a

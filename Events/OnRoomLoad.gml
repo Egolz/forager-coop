@@ -45,14 +45,5 @@
 // touches nothing but globals), `OUT` reports on the socket that is still open, and only then
 // `CoopLeaveWorld` performs the close. What `OUT` says about `sock` is therefore the value
 // *before* the close, which is exactly what has to be recorded to interpret the next run.
-CoopSendDebugLine("probe roomload IN peerAlive=" + string(global.coopPeerAlive)
-                  + " connected=" + string(global.coopConnected)
-                  + " host=" + string(global.coopIsHost)
-                  + " sock=" + string(global.coopSocket)
-                  + " player=" + string(instance_exists(objPlayer))
-                  + " tick=" + string(global.coopTick));
 CoopForgetWorld();
-CoopSendDebugLine("probe roomload OUT survived tick=" + string(global.coopTick)
-                  + " sock=" + string(global.coopSocket)
-                  + " host=" + string(global.coopIsHost));
 CoopLeaveWorld();

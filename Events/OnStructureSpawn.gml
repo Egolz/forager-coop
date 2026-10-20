@@ -20,21 +20,6 @@ if (_name == "") {
     return;
 }
 
-// Diagnostic, temporary (build-grid investigation, 2026-10-20). A structure the **game** places
-// is the ground truth for where a structure belongs, and this is the only place that sees one.
-// It reports the raw spawn coordinates and their remainders against the candidate cell sizes
-// (8, 12, 16, 24), which is what settled the grid: the world is tiled at **16 px**, and a
-// structure reports its block corner while a natural object reports its cell centre.
-CoopSendDebugLine("probe spawn: obj#" + string(i.object_index)
-                  + " '" + object_get_name(i.object_index) + "'"
-                  + " name '" + _name + "' struc " + string(struc)
-                  + " at " + string(i.x) + "," + string(i.y)
-                  + " mod8 " + string(i.x mod 8) + "," + string(i.y mod 8)
-                  + " mod16 " + string(i.x mod 16) + "," + string(i.y mod 16)
-                  + " mod24 " + string(i.x mod 24) + "," + string(i.y mod 24)
-                  + " sprite " + string(i.sprite_index)
-                  + " depth " + string(i.depth)
-                  + " objStruct " + string(struc));
 
 if (global.coopIsHost) {
     // i.depth is not the game's depth yet - OnStructureSpawn() runs before the

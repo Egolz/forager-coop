@@ -42,7 +42,5 @@ if (_type == network_type_data) {
     // stopped answering ~8 s before the fault without it, ~6 s with it), which is exactly what
     // a double free does to a heap. It has been removed, and this comment stays so the next
     // reader does not "fix" the same non-leak again.
-    global.coopRxCount += 1;   // diagnostic: how many packets this side has handled (see OnStep)
-    global.coopPhase = 20;     // about to decode and act on a packet
     CoopHandleData(async_load[? "buffer"]);
 }

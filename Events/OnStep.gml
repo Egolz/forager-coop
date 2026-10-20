@@ -12,7 +12,6 @@ if (keyboard_check_pressed(vk_f10)) CoopProbeWorld();
 if (keyboard_check_pressed(vk_f11)) CoopProbeApi();
 if (keyboard_check_pressed(vk_f12)) CoopProbeSpot();
 if (keyboard_check_pressed(vk_f3)) CoopProbeItems();
-if (keyboard_check_pressed(vk_f4)) CoopProbeGrid();
 
 // ---------------------------------------------------------------------------
 // **Save & quit: end the session here, before the world unloads.**
@@ -57,102 +56,9 @@ if (!instance_exists(objPlayer)) exit;
 
 global.coopTick += 1;
 
-// Diagnostic, temporary (native crash, 2026-10-20). The fault leaves no log, so the only
-// record of where the game died is what the peer already received. Reporting the phase on a
-// timer turned out to be too coarse: the last test announced `phase 10` every five seconds
-// while the game ran, and a phase that is *set* rather than *reset* says nothing about the
-// moment in between. So this reports it **on change** as well, rate-limited to avoid the
-// flood an earlier version of this diagnostic caused (comments above are the record of that
-// mistake - a counter sitting before its own increment fired every frame).
-//
-// `phaseAge` counts frames since the last change, so a phase that never changes is visible
-// too: a frozen phase with a growing age means the game is stuck *inside* that operation,
-// which is a different and much more specific finding than "it was somewhere in OnStep".
-if (global.coopPhase != global.coopPhaseSent) {
-    CoopSendDebugLine("probe phase " + string(global.coopPhase)
-                      + " at tick " + string(global.coopTick)
-                      + " rx " + string(global.coopRxCount));
-    global.coopPhaseSent = global.coopPhase;
-    global.coopPhaseAge  = 0;
-} else {
-    global.coopPhaseAge += 1;
-}
-if (global.coopTick mod 300 == 0) {
-    CoopSendDebugLine("probe tick " + string(global.coopTick)
-                      + " rx " + string(global.coopRxCount)
-                      + " phase " + string(global.coopPhase)
-                      + " age " + string(global.coopPhaseAge)
-                      + " player " + string(instance_exists(objPlayer)));
-}
 
-// Diagnostic (M3.1). The owner reported the peer's puppet appearing **only while the player
-// moves**, and the name landing inside the puppet rather than above its head. Both are
-// questions about numbers, so this reports the numbers, on change, so the log shows the track
-// the puppet follows instead of a snapshot of it.
-//
-// What it reports and why each number is here:
-//   * where the peer is, and in which room - a puppet that is drawn in the wrong room, or at
-//     a position that is not where the peer said it was, is a **sync** bug, not a draw bug;
-//   * the sprite the peer sent (`-1` for the mock peer, which has no assets) and the sprite the
-//     host would actually draw for it - the fallback is `objPlayer.sprite_index`, and that is
-//     worth seeing, because a sprite index of 0 would make the puppet disappear entirely;
-//   * that sprite's height and origin offset - the two numbers that say where its head is;
-//   * the host's own player position and sprite, so the two can be compared: the mock peer
-//     places itself 96 px to the left of the host's player, and if the two disagree, the
-//     puppet is being drawn where the peer is not.
-if (global.coopPeer.seen && instance_exists(objPlayer)) {
-    CoopResolveBodySprite();   // so `bodySpr` in the line below is the resolved value
-    var _ps = global.coopPeer.sprite;
-    if (_ps <= 0) _ps = objPlayer.sprite_index;
-    var _pk = string(global.coopPeer.x) + "," + string(global.coopPeer.y)
-              + " peerSpr " + string(global.coopPeer.sprite)
-              + " drawSpr " + string(_ps)
-              + " bodySpr " + string(global.coopBodySprite)
-              + " room " + string(global.coopPeer.room)
-              + " | me " + string(floor(objPlayer.x)) + "," + string(floor(objPlayer.y))
-              + " spr " + string(objPlayer.sprite_index)
-              + " img " + string(objPlayer.image_index);
-    if (_ps > 0) {
-        // One argument, not two: this build's sprite_get_height/sprite_get_yoffset take only
-        // the sprite (see the note in OnDrawEnd.gml).
-        _pk = _pk + " h " + string(sprite_get_height(_ps))
-                  + " yo " + string(sprite_get_yoffset(_ps));
-    }
-    if (_pk != global.coopPeerKey) {
-        global.coopPeerKey = _pk;
-        CoopSendDebugLine("probe peer " + _pk);
-    }
 
-    // The body probe runs once, as soon as there is a peer to draw. It answers the question
-    // the "probe peer" line raised: the sprite index the game reports for the player is a
-    // flag, not an asset, so which sprite is the body?
-    if (!global.coopBodyProbeDone) {
-        global.coopBodyProbeDone = true;
-        CoopProbeBody();
-    }
-}
 
-// Packet corpus: the whole recent operation ring goes out whenever a new token was added.
-// This is the flight recorder the phase marker is not - see the diagnostics block in
-// Net.gml. It rides the once-per-frame OnStep rather than being sent where the token was
-// added, so a send can never happen in the middle of parsing a packet.
-if (global.coopTraceDirty) {
-    global.coopTraceDirty = false;
-    var _ct_line = "corpus";
-    for (var _ct_j = 0; _ct_j < array_length(global.coopTrace); _ct_j += 1) {
-        _ct_line += " " + global.coopTrace[_ct_j];
-    }
-    CoopSendDebugLine(_ct_line);
-}
-
-// Phase markers for the native crash. The fault kills the process without reaching
-// error.log, so the only evidence is what the peer already received - and the last phase
-// number to arrive names the code the game died in. Cheap (an assignment) and removed
-// together with the rest of the diagnostics.
-//
-// Deliberately **not** reset each frame: it is set immediately before each operation that
-// could fault, so whatever the peer last heard is the operation the game was inside when it
-// died. A reset would only ever answer "we were in OnStep", which is known already.
 
 // heartbeat: keep at most one ping in flight
 if (global.coopTick mod 90 == 0 && global.coopPingSentAt < 0) {
@@ -167,10 +73,7 @@ if (global.coopPingSentAt >= 0 && current_time - global.coopPingSentAt > 5000) {
 
 // presence: ~20 packets/second, cosmetic and latency-sensitive
 if (global.coopTick mod 3 == 0) {
-    global.coopPhase = 13;   // sending our position
-    CoopTraceStep("sndpos");   // diagnostic: the corpus's send half
     CoopSendPos();
-    CoopTraceStep("spos");
 }
 
 // ============================================================================
@@ -245,7 +148,6 @@ if (global.coopBushObj == -2) {
 }
 
 if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
-    global.coopPhase = 10;   // walking the plant snapshot
     var _prev_obj = global.coopBushObjAt;   // object index of each plant, last step
     var _prev_id  = global.coopBushIds;     // its instance id
     var _prev_x   = global.coopBushXs;      // its x
@@ -314,9 +216,7 @@ if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
         }
         if (_bush_alive) continue;
         // Absent from the active walk - but is it gone, or only culled?
-        global.coopPhase = 11;   // asking whether a vanished plant is really gone
         if (CoopPlantStillExists(_prev_obj[_p], _prev_x[_p], _prev_y[_p])) continue;
-        global.coopPhase = 12;   // announcing the picked plant
         CoopSendResourceDestroy(_prev_x[_p], _prev_y[_p], _prev_obj[_p]);
     }
 
@@ -324,6 +224,4 @@ if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
     global.coopBushIds   = _now_id;
     global.coopBushXs    = _now_x;
     global.coopBushYs    = _now_y;
-    global.coopPhase = 14;   // diagnostic: the plant walk finished without faulting
-    CoopTraceStep("plants");
 }

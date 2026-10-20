@@ -181,11 +181,37 @@ if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
     var _now_x    = [];
     var _now_y    = [];
 
+    // **`_bush_fresh` is the whole reason this walk is safe.** The pair
+    // `instance_number(obj)` / `instance_find(obj, i)` looks like a plain enumeration and is
+    // the documented idiom, but it is only valid if the instance **list does not change
+    // between the two calls** - and here it can, because this runs from the system step while
+    // the game is free to destroy plants (the owner was picking berries during the crash runs
+    // of 2026-10-20). `instance_number` snapshots a count; a later `instance_find` with an
+    // index below that count can land on a slot the destroy has already freed, and then
+    // `_inst.object_index` is a read of released memory - the `0xc0000005` class, and the one
+    // crash that does not announce itself in any log.
+    //
+    // The three observations that point here, none of which fits a packet or a send fault:
+    //   * the corpus ends `... pkt5 pkt6 gotpos pos sndpos spos plants plants plants` - every
+    //     packet in flight was read to completion and our own POS send completed, so the fault
+    //     is *after* all of that, inside the plant walk (the last corpus of the 19:31 crash);
+    //   * `place` and `placed` are both 16 in the same log and neither is ever left dangling,
+    //     so the structure path is clean;
+    //   * the fault address is one fixed instruction (`0x012c265f`) reached only after minutes
+    //     of play, which is a stale-handle read that needs a plant to be picked while the walk
+    //     is live - rarer than a per-frame fault, commoner than never.
+    //
+    // So the guard is made explicit: ask `instance_exists` **from the remembered list**, one
+    // entry at a time, and never trust an index into a list this frame has already changed.
+    // `instance_exists` is in this build (proven live) and returns false for a deactivated or
+    // destroyed instance, which is exactly the test needed - the entry simply drops out.
     for (var _b = 0; _b < array_length(global.coopBushObj); _b += 1) {
         var _obj   = global.coopBushObj[_b];
         var _count = instance_number(_obj);
         for (var _i = 0; _i < _count; _i += 1) {
             var _inst = instance_find(_obj, _i);
+            // Re-checked immediately, and the fields are read only after the check: the
+            // count above is a snapshot, so `_i` may already name a freed slot.
             if (!instance_exists(_inst)) continue;
             array_push(_now_obj, _inst.object_index);
             array_push(_now_id,  _inst);

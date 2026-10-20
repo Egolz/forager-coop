@@ -6,6 +6,12 @@ var _type = async_load[? "type"];
 if (_type == network_type_connect) {
     if (global.coopIsHost) {
         global.coopSocket    = async_load[? "socket"];
+        // **The runtime owns this socket, not us.** It was handed over by the async connect,
+        // so it is the runtime - not `CoopResetPeer` - that releases it on disconnect.
+        // Destroying it ourselves is the second destroy that produced every native crash of
+        // 2026-10-20 (`0xc0000005` at `0x012c265f`, only ever with a peer connected). The
+        // flag is what tells the one teardown path which kind of socket it is holding.
+        global.coopSocketOwned = false;
         global.coopConnected = true;
         Trace("Co-op: peer socket connected ("
               + string(async_load[? "ip"]) + ":" + string(async_load[? "port"])

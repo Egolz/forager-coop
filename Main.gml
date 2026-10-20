@@ -39,7 +39,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.29-m2aa";
+global.coopVersion  = "0.0.30-m2ab";
 global.coopProtocol = 4;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY)
@@ -53,7 +53,10 @@ global.coopSolidRadius = 24;   // see Net.gml: how close counts as the same buil
 // and therefore only ever sampled *inside* what the live probe now shows is a 4x4 tile
 // structure sitting on a 24 px grid.
 global.coopFootprint   = 24;
-global.coopSolidObj    = -2;   // -2 = not resolved yet, -1 = no parSolid in this build
+global.coopSolidObj    = -2;   // -2 = not resolved yet (kept as the "have we looked" flag)
+global.coopSolidObjs   = [];   // the concrete object families that block a build cell: see
+                               // CoopSolidNear - `instance_number(parSolid)` is 0 in this
+                               // build, so the leaf families are listed instead
 global.coopLivingObjs  = [];   // player/NPC/enemy/pet object indices, resolved lazily
 
 global.coopIsHost    = false;  // we own the listening server
@@ -61,6 +64,10 @@ global.coopConnected = false;  // a peer socket is up
 global.coopPeerAlive = false;  // handshake completed
 
 global.coopSocket = -1;        // the socket we talk to the peer on (both sides)
+global.coopSocketOwned = false; // true only for a socket we created with network_create_socket
+                               // (the client's); a host's peer socket belongs to the runtime.
+                               // Destroying a runtime-owned socket again is the native crash
+                               // of 2026-10-20 - see CoopResetPeer in Net.gml.
 global.coopServer = -1;        // listening server (host only)
 
 global.coopPeer = { x: 0, y: 0, angle: 0, room: -1, sprite: -1, image: 0, facing: 1, seen: false };

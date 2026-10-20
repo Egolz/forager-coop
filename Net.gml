@@ -49,20 +49,30 @@ if (global.coopSocket >= 0) {
 #define CoopResetPeer()
 // Drops the peer, keeping the listening server (host) if there is one.
 //
-// **It destroys the peer socket before forgetting it**, and that line is the fix for a hard
-// crash, not tidiness. The socket used to be dropped by writing -1 over it, which leaks the
-// handle: `network_destroy` was called for `coopServer` alone and never for `coopSocket`, so
-// a session left a live socket behind. Leaving the world with a mock peer connected took the
-// whole game down with a native access violation
-// (Application Error, `Forager.exe`, exception `0xc0000005`, faulting offset
-// `0x012c265f`) instead of returning to the main menu - reproducible only while connected,
-// and invisible to error.log, because a native fault never reaches the GML error handler.
-// That is the shape of a socket whose owner is gone.
+// **This is the crash fix (2026-10-20): only destroy a socket we created ourselves.**
+// The previous version destroyed `global.coopSocket` unconditionally, and that is wrong for
+// the *host*, because the two sides acquire their socket in different ways:
 //
-// The guard matters: the host receives its peer socket through the async connect event
-// (`OnNetworkAsync`), a client makes its own with `network_create_socket`, and both end up
-// in this one global - so this is the single place that knows to close whichever it is.
-if (global.coopSocket >= 0) network_destroy(global.coopSocket);
+//   * a **client** makes its own with `network_create_socket` and therefore owns it - it must
+//     be destroyed or it leaks;
+//   * a **host** never creates the peer socket at all: the runtime hands it over in the async
+//     connect event (`OnNetworkAsync`, `network_type_connect`), and the runtime releases it
+//     when the peer disconnects (`network_type_disconnect`). Destroying it ourselves is a
+//     **second** destroy of a handle the runtime has already retired.
+//
+// That is a socket whose owner is gone - and it is the exact shape of this bug: a native
+// access violation (`0xc0000005`) at **one fixed instruction** (`0x012c265f`) in all sixteen
+// crashes of 2026-10-20, reproducible **only while a peer is connected**, and invisible to
+// error.log because a native fault never reaches the GML error handler. The fault needs a
+// disconnect to happen first, which is why it takes minutes rather than seconds, and why the
+// mock's own log always shows `connection closed by peer` immediately before the death:
+// the peer's socket closes, the runtime tears the socket down, our disconnect handler then
+// destroys it a second time.
+//
+// `global.coopSocketOwned` is the whole fix: set true where the client creates its socket and
+// false where the host receives one, so this single place still knows how to close whichever
+// it is - which was the original intent of the guard, and what it now actually does.
+if (global.coopSocket >= 0 && global.coopSocketOwned) network_destroy(global.coopSocket);
 global.coopConnected   = false;
 global.coopPeerAlive   = false;
 global.coopPeer.seen   = false;
@@ -70,6 +80,7 @@ global.coopPeerVersion = "";
 global.coopPingSentAt  = -1;
 global.coopPingMs      = -1;
 global.coopSocket      = -1;
+global.coopSocketOwned = false;
 global.coopPending        = [];
 global.coopApplyingRemote = false;
 
@@ -127,11 +138,14 @@ if (_ip == "") exit;
 
 global.coopSocket = network_create_socket(network_socket_tcp);
 if (global.coopSocket < 0) { Trace("Co-op: could not create a socket."); exit; }
+global.coopSocketOwned = true;   // we made this one, so we must destroy it - see CoopResetPeer
 
 var _r = network_connect(global.coopSocket, _ip, global.coopPort);
 if (_r < 0) {
     Trace("Co-op: connect to " + _ip + ":" + string(global.coopPort) + " FAILED.");
-    global.coopSocket = -1;
+    if (global.coopSocket >= 0) network_destroy(global.coopSocket);
+    global.coopSocket      = -1;
+    global.coopSocketOwned = false;
     exit;
 }
 global.coopConnected = true;
@@ -647,42 +661,112 @@ return -floor(_y);
 //    and it has no instances of its own anyway (the game keeps a furnace under
 //    objFurnace).
 //
+//    **`instance_number(parSolid)` returns 0 in this build** (live, 2026-10-20
+//    19:27): the mock placed a furnace at 600,600 - where a rock was standing, and
+//    the owner saw it land on the rock - and every one of the four cell samples
+//    reported no solid at all. The F12 probe that "proved" parSolid works only ever
+//    walked `parSolid`'s **children** (objTree, objRock, objFurnace); it never asked
+//    the parent for a census. Instances here are held by the concrete leaf objects,
+//    and the parent is an ancestor for `instance_exists`/`object_get_parent`, not a
+//    bucket `instance_number` can enumerate - the same "present in data.win, but the
+//    behaviour is not what the name suggests" trap as `string_split`. So the concrete
+//    family objects are listed below instead.
+//
 //  * Living things - the player and any NPC, enemy or pet. A player cannot build on
-//    themselves or on another character, and parSolid does not cover them: the first
-//    live run of this test (2026-10-20, 03:47) placed a furnace exactly under the
-//    host at offset (0,0) and was accepted, which the owner caught at once. The
-//    names below are resolved once and skipped when this build does not have them,
-//    so a rename costs a missing guard and never a failed COMPILE.
+//    another character, and parSolid does not cover them: the first live run of this
+//    test (2026-10-20, 03:47) placed a furnace exactly under the host at offset (0,0)
+//    and was accepted, which the owner caught at once. The names below are resolved
+//    once and skipped when this build does not have them, so a rename costs a missing
+//    guard and never a failed COMPILE.
 //
 // Only calls already proven live are used (asset_get_index, instance_number,
 // instance_find, point_distance) - no collision builtin, which is what keeps this
 // honest before one is tested.
-if (global.coopSolidObj == -2) global.coopSolidObj = asset_get_index("parSolid");
+if (global.coopSolidObj == -2) {
+    // The concrete families, not their common ancestor - see the note above. Every name
+    // that does not exist in this build resolves to -1 and drops out.
+    global.coopSolidObjs = [];
+    var _sld_fams = ["parNatural", "parHerb", "parStructure", "objRock", "objTree"];
+    for (var _sld_fi = 0; _sld_fi < array_length(_sld_fams); _sld_fi += 1) {
+        var _sld_fo = asset_get_index(array_get(_sld_fams, _sld_fi));
+        if (_sld_fo >= 0) array_push(global.coopSolidObjs, _sld_fo);
+    }
+    global.coopSolidObj = 0;   // marker: resolved (0 is never a valid object index)
+    // One line, once, so the next live run confirms this on the spot instead of relying on
+    // an offline read of data.win: the family list, and parSolid's own (expected zero) count.
+    if (global.coopPeerAlive) {
+        var _sld_par = asset_get_index("parSolid");
+        CoopSendDebugLine("probe solids: watching "
+                          + string(array_length(global.coopSolidObjs)) + " families "
+                          + string(global.coopSolidObjs)
+                          + " (parSolid itself has "
+                          + string(_sld_par >= 0 ? instance_number(_sld_par) : -1) + " instances)");
+    }
+}
 if (global.coopLivingObjs == undefined) global.coopLivingObjs = [];
 if (array_length(global.coopLivingObjs) == 0) {
     var _sld_names = ["objPlayer", "parNPC", "parEnemy", "objPet"];
-    for (var _sld_ni = 0; _sld_ni < array_length(_sld_names); _sld_ni++) {
+    for (var _sld_ni = 0; _sld_ni < array_length(_sld_names); _sld_ni += 1) {
         var _sld_oi = asset_get_index(array_get(_sld_names, _sld_ni));
         if (_sld_oi >= 0) array_push(global.coopLivingObjs, _sld_oi);
     }
 }
 var _sld_hits = 0;
-if (global.coopSolidObj >= 0) {
-    var _sld_n = instance_number(global.coopSolidObj);
-    for (var _sld_i = 0; _sld_i < _sld_n; _sld_i++) {
-        var _sld_inst = instance_find(global.coopSolidObj, _sld_i);
+for (var _sld_si = 0; _sld_si < array_length(global.coopSolidObjs); _sld_si += 1) {
+    var _sld_sobj = global.coopSolidObjs[_sld_si];
+    var _sld_n = instance_number(_sld_sobj);
+    for (var _sld_i = 0; _sld_i < _sld_n; _sld_i += 1) {
+        var _sld_inst = instance_find(_sld_sobj, _sld_i);
         if (point_distance(_sld_inst.x, _sld_inst.y, _x, _y) <= global.coopSolidRadius) _sld_hits += 1;
     }
 }
-for (var _sld_li = 0; _sld_li < array_length(global.coopLivingObjs); _sld_li++) {
+for (var _sld_li = 0; _sld_li < array_length(global.coopLivingObjs); _sld_li += 1) {
     var _sld_lobj = array_get(global.coopLivingObjs, _sld_li);
     var _sld_ln = instance_number(_sld_lobj);
-    for (var _sld_lj = 0; _sld_lj < _sld_ln; _sld_lj++) {
+    for (var _sld_lj = 0; _sld_lj < _sld_ln; _sld_lj += 1) {
         var _sld_linst = instance_find(_sld_lobj, _sld_lj);
         if (point_distance(_sld_linst.x, _sld_linst.y, _x, _y) <= global.coopSolidRadius) _sld_hits += 1;
     }
 }
 return _sld_hits;
+
+#define CoopSolidInCell(_x, _y)
+// -> how many solids or living things stand in the **same build-cell** as (_x,_y).
+//    A cell is 24 px; `floor(v / 24)` is its index, which is how this differs from
+//    CoopSolidNear's "within a radius" question.
+//
+// This exists because a radius cannot answer "is this cell taken". The placement check
+// sampled four points 24 px apart with `global.coopSolidRadius = 24`, so the samples
+// overlapped and a single rock was counted four times - every refusal read
+// "(4 of 4 tiles)" while one thing was there. Membership has no overlap: a position is
+// reduced to its own cell and compared, so each solid is counted at most once, and only
+// when it really shares ground with the structure being built.
+//
+// The distance variant is kept: it is the right question for "is anything standing near
+// the player", and it is already live-tested.
+var _sic_cell_x = floor(_x / 24);
+var _sic_cell_y = floor(_y / 24);
+var _sic_hits = 0;
+if (global.coopSolidObj == -2) CoopSolidNear(0, 0);   // resolve the family lists once
+for (var _sic_si = 0; _sic_si < array_length(global.coopSolidObjs); _sic_si += 1) {
+    var _sic_sobj = global.coopSolidObjs[_sic_si];
+    var _sic_n = instance_number(_sic_sobj);
+    for (var _sic_i = 0; _sic_i < _sic_n; _sic_i += 1) {
+        var _sic_inst = instance_find(_sic_sobj, _sic_i);
+        if (floor(_sic_inst.x / 24) == _sic_cell_x
+            && floor(_sic_inst.y / 24) == _sic_cell_y) _sic_hits += 1;
+    }
+}
+for (var _sic_li = 0; _sic_li < array_length(global.coopLivingObjs); _sic_li += 1) {
+    var _sic_lobj = array_get(global.coopLivingObjs, _sic_li);
+    var _sic_ln = instance_number(_sic_lobj);
+    for (var _sic_lj = 0; _sic_lj < _sic_ln; _sic_lj += 1) {
+        var _sic_linst = instance_find(_sic_lobj, _sic_lj);
+        if (floor(_sic_linst.x / 24) == _sic_cell_x
+            && floor(_sic_linst.y / 24) == _sic_cell_y) _sic_hits += 1;
+    }
+}
+return _sic_hits;
 
 #define CoopStructureNameOf(_struc, _obj)
 // The name of the structure an instance belongs to. OnStructureSpawn() hands us
@@ -1415,22 +1499,32 @@ switch (_cmd) {
         // +/-12 px from a grid point lands on the **shared corner of four tiles** - the one
         // place in a 24 px grid where "which tile is this?" has no answer, and the game's
         // tile test evidently resolves the ambiguity differently from the way its own
-        // builder does. The four points that really cover a 2x2 block are its four *cell*
-        // centres, 24 px out from the grid point along each axis:
+        // builder does.
         //
-        //       (_ix-24,_iy-24) (_ix+24,_iy-24)
-        //       (_ix-24,_iy+24) (_ix+24,_iy+24)
+        // The live spawn probe of 19:27 settles the geometry, and it says the point is the
+        // structure's **centre**, not a corner:
         //
-        // which is what global.coopFootprint now holds. A 2x2 structure asked at six
-        // neighbours of the player was refused *six times out of six* with this bug - every
-        // one of them a false "occupied", so the mock found no legal ground anywhere and
-        // never placed its furnace. That is the reported symptom, and it was the check, not
-        // the placement.
+        //   probe spawn: obj#109 'objFurnace' ... at 600,600 mod24 0,0 ...
+        //
+        // The game's own build path puts a 48 px furnace down on a multiple of 24 and reports
+        // success, so the 2x2 block spans [x-24, x+24) - four cells, whose centres sit at
+        // x-12 and x+12. Those are the four points below. The whole 48 px square is then
+        // covered by masking each cell centre across all 24 px cells it can fall in
+        // (`floor((c + 12) / 24)`), which is a **9-cell** test - the four cells the structure
+        // occupies plus their rim - because a structure that hangs even one cell over water
+        // is what the owner reported and what this has to refuse. The previous +/-12 offset
+        // was a corner sample and produced a false "occupied" on a known-free cell; this one
+        // cannot, because every sample is strictly inside a cell.
         var _wq_water = 0;
         for (var _wq_dx = -1; _wq_dx <= 1; _wq_dx += 2) {
             for (var _wq_dy = -1; _wq_dy <= 1; _wq_dy += 2) {
-                if (WaterCollision(_ix + _wq_dx * global.coopFootprint,
-                                   _iy + _wq_dy * global.coopFootprint) != 0) _wq_water += 1;
+                // The four cells the 2x2 block covers, reduced to cell centres the way
+                // CoopSolidInCell reduces a solid: floor((centre + 12) / 24) is the cell
+                // index of a point _ix +/- 12, so this asks the same four cells the
+                // occupancy check asks, and no corner is ever sampled.
+                var _wq_cx = floor((_ix + _wq_dx * 12 + 12) / 24) * 24;
+                var _wq_cy = floor((_iy + _wq_dy * 12 + 12) / 24) * 24;
+                if (WaterCollision(_wq_cx, _wq_cy) != 0) _wq_water += 1;
             }
         }
         if (_wq_water > 0) {
@@ -1444,31 +1538,40 @@ switch (_cmd) {
         }
         // Occupied? A player can build on bare ground only - not on a tree, a rock
         // or an existing structure. WaterCollision answers water; this answers
-        // "something is already standing here", measured against parSolid, the one
-        // ancestor trees, rocks and buildings share (F12, live 2026-10-20).
+        // "something is already standing here".
         //
-        // Checked at the same four **cell centres** as the water test, for the same reason,
-        // and with the same +/-12 px mistake corrected: the radius below already covers a
-        // full 24 px cell, so sampling on a tile corner used to make one solid count as a
-        // hit in **all four** cells at once - "occupied (4 of 4 tiles)" for a single tree,
-        // live 2026-10-20. That is why the refusals read (4 of 4) so often: it was one
-        // instance, counted four times.
+        // **Two separate bugs met here and both are now gone.** The owner caught the first
+        // live (2026-10-20 19:27): the mock placed its furnace at 600,600 *on top of a rock*.
+        // That was CoopSolidNear asking `instance_number(parSolid)`, which is **0** in this
+        // build, so the walk found nothing to count and every cell read "free" - fixed there
+        // by listing the concrete families.
+        //
+        // The second was in *this* loop and the first fix did not touch it: it sampled the
+        // four points at +/-12 px and asked "is a solid within `global.coopSolidRadius`?".
+        // With a radius of 24 those four samples are exactly 24 px apart, so they **overlap**,
+        // and one solid still counted in all four - the "(4 of 4 tiles)" refusals of the
+        // 19:16 run. A radius cannot express "this solid is in one of these four cells"; it
+        // can only express "this solid is near", and near is not the question.
+        //
+        // So the test is now the thing it was always meant to be: **tile membership**. The
+        // structure is 2x2 cells centred on (_ix,_iy), so it covers the four cells whose
+        // centres are (_ix +/- 12, _iy +/- 12); a solid blocks the build when the cell it
+        // stands in is one of those four. `floor(v / 24)` is the cell index of any point,
+        // which is how a solid's own position is reduced to its cell - no radius, no
+        // overlap, and each solid counted at most once because only its own cell is asked.
         //
         // The player is excluded from this test on purpose. The spot is asked for *next to*
         // the requester, and the requester's own body is the nearest living thing to it, so
         // counting it would refuse every placement a player tries to make beside themselves.
         // It was never a real rule - the first live run (2026-10-20) placed a structure
-        // exactly under the host at offset (0,0), and the owner rejected that shape: the
-        // rule is meant to stop building *on* something, not building *near* someone.
+        // exactly under the host at offset (0,0), and the owner rejected that shape.
         //
         // Where the player is still checked is the **host's own** cell: an intent that
-        // would put a structure on top of the host is refused here, and a client cannot
-        // build on the peer it is standing on. That asymmetry is deliberate and small.
+        // would put a structure on top of the host is refused here.
         var _oq_solid = 0;
         for (var _oq_dx = -1; _oq_dx <= 1; _oq_dx += 2) {
             for (var _oq_dy = -1; _oq_dy <= 1; _oq_dy += 2) {
-                if (CoopSolidNear(_ix + _oq_dx * global.coopFootprint,
-                                  _iy + _oq_dy * global.coopFootprint) > 0) _oq_solid += 1;
+                if (CoopSolidInCell(_ix + _oq_dx * 12, _iy + _oq_dy * 12) > 0) _oq_solid += 1;
             }
         }
         if (_oq_solid > 0) {

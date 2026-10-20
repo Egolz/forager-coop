@@ -39,7 +39,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.16-m2n";
+global.coopVersion  = "0.0.17-m2o";
 global.coopProtocol = 4;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY)
@@ -58,6 +58,17 @@ global.coopServer = -1;        // listening server (host only)
 
 global.coopPeer = { x: 0, y: 0, angle: 0, room: -1, sprite: -1, image: 0, facing: 1, seen: false };
 global.coopPeerVersion = "";
+
+// M3. The name the other player chose, shown over their puppet (M3.3). It travels
+// in HELLO/WELCOME, so it is known from the first handshake - no extra packet, and
+// it arrives before the first puppet is ever drawn.
+global.coopName     = "player";  // what we call ourselves; see CoopLocalName below
+global.coopPeerName = "";        // what the peer called themselves ("peer" until known)
+
+// Temporary: how many resource-spawn probe lines have gone out (see
+// Events/OnResourceSpawn.gml). Reset each session; the probe is removed when M2.2's
+// resource coverage is settled.
+global.coopSpawnProbe = 0;
 global.coopPingNonce   = 0;
 global.coopPingSentAt  = -1;
 global.coopPingMs      = -1;

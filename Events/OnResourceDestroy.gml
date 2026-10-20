@@ -22,6 +22,24 @@ if (!global.coopPeerAlive) return;       // no one to tell
 if (!instance_exists(objPlayer)) return; // menus, logo rooms
 if (!instance_exists(i)) return;
 
+// M2.2 coverage probe (2026-10-20). The owner pointed out that a berry bush and a
+// built structure ("buildings the player is standing on drop things too") may not
+// take this path at all, so the harvest of *different kinds* of thing is being
+// measured before more handlers are written on a guess. DEBUG_LINE reaches the mock;
+// Trace does not leave the machine. The object name and its parent matter because the
+// wire carries the index while a human reads the name.
+//
+// Only fields known to exist on the whole `parResource` family are read: `hp` is NOT
+// logged here even though OnResourceSpawn carries it, because a berry bush may not
+// have it and this build has no `variable_instance_exists` to test with - a missing
+// field would take the game down, and a log line is not worth that.
+CoopSendDebugLine("probe OnResourceDestroy: obj#" + string(i.object_index)
+                  + " '" + object_get_name(i.object_index) + "'"
+                  + " parent '" + object_get_name(object_get_parent(i.object_index)) + "'"
+                  + " at " + string(floor(i.x)) + "," + string(floor(i.y))
+                  + " depth " + string(i.depth)
+                  + " image " + string(i.image_index));
+
 CoopSendResourceDestroy(i.x, i.y, i.object_index);
 if (global.coopIsHost) {
     Trace("Co-op: announced resource destroy " + object_get_name(i.object_index)

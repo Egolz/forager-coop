@@ -339,17 +339,46 @@ CoopSend(_it_b);
 // ids are build constants (Item.Wood == 0, verified live 2026-10-20).
 // ---------------------------------------------------------------------------
 
+#define CoopPlantStillExists(_obj, _x, _y)
+// -> true when an instance of _obj is still in the room at (_x,_y), even if the room has
+//    **deactivated** it. The plant snapshot in OnStep walks active instances only, so a
+//    culled bush looks exactly like a picked one to it; this is the walk that tells them
+//    apart, by asking the true-instance system, which sees deactivated instances as well.
+//
+// Reading here is safe where destroying is not: this only compares `x`/`y` and returns a
+// boolean, and it never touches the instance it finds. That is the whole reason the two
+// walks can differ - see CoopApplyResourceDestroy, which destroys and therefore must use
+// the active set.
+//
+// Matched on **object index and tile**, not on the remembered instance id: a destroyed
+// instance's id can be handed to a new instance, so an id is not proof that the old bush
+// is still there, while an object at the same tile in the same room is.
+var _pse_n = TrueInstanceNumber(_obj);
+for (var _pse_i = 0; _pse_i < _pse_n; _pse_i++) {
+    var _pse_inst = TrueInstanceFind(_obj, _pse_i);
+    if (floor(_pse_inst.x) == floor(_x) && floor(_pse_inst.y) == floor(_y)) return true;
+}
+return false;
+
 #define CoopDropAt(_x, _y, _item, _radius)
 // -> an existing dropped-item instance of that item within _radius of (_x,_y), or -1.
 //    A drop's own instance is what has to be removed when someone picks it up, and
-//    it is found the same way structures are: by walking the true instances, so a
-//    culled (offscreen) drop is found too. `parResource` is the parent, and the item
-//    is matched through the instance's own `item` field - the same field
+//    it is found the same way structures are: by walking instances of `parResource`
+//    and matching the item through the instance's own `item` field - the same field
 //    OnItemDrop() reads - so no name lookup is involved.
+//
+// **Active instances only, deliberately** (same reasoning as CoopApplyResourceDestroy,
+// which was changed on live evidence the same day). This walk used `TrueInstance*`,
+// which also returns instances the room has **deactivated**, and a deactivated
+// instance is exactly what a dropped item becomes when it is culled off-screen. The
+// result was read (`_da_inst.item`) from returns the walk could not safely touch. A
+// pickup that finds nothing returns -1 and the peer keeps the pile it cannot see -
+// which is the cheaper, recoverable error compared with reading dead memory.
 var _da_res = -1;
-var _da_n   = TrueInstanceNumber(parResource);
+var _da_n   = instance_number(parResource);
 for (var _da_i = 0; _da_i < _da_n; _da_i++) {
-    var _da_inst = TrueInstanceFind(parResource, _da_i);
+    var _da_inst = instance_find(parResource, _da_i);
+    if (!instance_exists(_da_inst)) continue;
     if (point_distance(_da_inst.x, _da_inst.y, _x, _y) > _radius) continue;
     // `variable_instance_exists` is NOT in this build's symbol table (checked
     // offline, count 0), so there is no runtime test for the field. The whole
@@ -454,17 +483,46 @@ return 1;
 
 #define CoopApplyResourceDestroy(_x, _y, _obj)
 // Destroy a harvested resource at the given tile. Object index rather than name, so
-// a localized build still matches. Walks true instances for the same reason drops do.
+// a localized build still matches.
 //
 // **This also removes a demolished structure** (see OnStructureDestroy). It is named for
 // resources because that is what it was written for, but the operation it performs - "the
 // instance of this object index at this tile is gone" - is the same one a demolished furnace
 // needs, and a structure is identified by an object index just as a rock is (the structure
 // database holds each row's object). So there is one removal path on the wire, not two.
+//
+// **Why this walks `instance_*` and not `TrueInstance*`.** The true-instance walk sees
+// **deactivated** instances as well as live ones, and it was the obvious way to reach a culled
+// (off-screen) resource. It was also wrong, and live evidence of 2026-10-20 says how:
+//
+//     [18:50:42] <- RESOURCE_DESTROY obj#86 at 616,728 room 8
+//     [18:50:43] <- RESOURCE_DESTROY obj#86 at 616,728 room 8
+//     [18:50:49] <- RESOURCE_DESTROY obj#86 at 616,728 room 8
+//     [18:50:55] <- RESOURCE_DESTROY obj#86 at 616,728 room 8
+//
+// The same bush, four times. Two separate faults produce that, and both are here:
+//
+//   1. `instance_destroy` on an instance the room has **deactivated** is a native operation on
+//      memory that is not in use - it does not raise a GML error, it takes the process down
+//      (`0xc0000005`). Every crash of 2026-10-20 faulted at the same instruction inside
+//      `.text` (`offset 0x012c265f`), and all sixteen of them fall after the loot sync landed
+//      at 16:24 - nothing crashed before it. A single faulting address is one instruction, not
+//      a leak, and this is the only place in the mod that destroys something it did not create.
+//   2. The sender's snapshot and this walk were different sets: the snapshot observes with
+//      `instance_number`/`instance_find` (**active** instances only, see OnStep), while this
+//      destroyed through `TrueInstance*` (**all**). A bush the room had deactivated therefore
+//      looked "gone" to the observer every single step, so it was announced again and again -
+//      four times above - while the destroy silently failed on the deactivated instance.
+//
+// Matching the snapshot's set fixes both at once: an instance this walk can see is an instance
+// it is safe to destroy. The accepted cost is the mirrored one - a resource culled off-screen
+// is not removed on the peer until it is in view - which is the same limitation the plant
+// snapshot already has, and is recorded in NOTES.md rather than papered over.
 var _ar_hits = 0;
-var _ar_n    = TrueInstanceNumber(_obj);
+var _ar_n    = instance_number(_obj);
 for (var _ar_i = 0; _ar_i < _ar_n; _ar_i++) {
-    var _ar_inst = TrueInstanceFind(_obj, _ar_i);
+    var _ar_inst = instance_find(_obj, _ar_i);
+    if (!instance_exists(_ar_inst)) continue;
     if (floor(_ar_inst.x) != floor(_x) || floor(_ar_inst.y) != floor(_y)) continue;
     global.coopApplyingLoot = true;
     instance_destroy(_ar_inst, false);
@@ -604,6 +662,12 @@ return "";
 #define CoopStructureAt(_obj, _x, _y)
 // -> an existing instance of _obj at (_x,_y), or -1. Uses the True Instance
 //    system, so instances culled offscreen are found too.
+//
+// Reading through the true-instance walk is safe and is kept on purpose: it only
+// **reads** `x`/`y` and returns an instance that is still allocated either way. The walk
+// that had to change is the one that **destroys** what it finds (CoopApplyResourceDestroy,
+// CoopUndoPrediction) - destroying a deactivated instance is the native fault, reading one
+// is not.
 var _at_res  = -1;
 var _at_n    = TrueInstanceNumber(_obj);
 for (var _at_i = 0; _at_i < _at_n; _at_i++) {
@@ -665,9 +729,16 @@ for (var _up_i = 0; _up_i < _up_n; _up_i++) {
     if (array_get(_up_p, 0) != _iid) continue;
     var _up_obj = array_get(_up_p, 4);
     if (_up_obj >= 0) {
-        var _up_tn = TrueInstanceNumber(_up_obj);
+        // Active instances only, for the same reason CoopApplyResourceDestroy uses them:
+        // `instance_destroy` on an instance the room has **deactivated** is a native fault
+        // (`0xc0000005`), not a catchable error, and `TrueInstanceFind` hands out exactly
+        // those as well. A structure is not normally culled the way a resource is, so this
+        // is symmetry and cheap insurance rather than a known bug - and if the rollback
+        // misses a culled instance it does nothing, which is the safe direction.
+        var _up_tn = instance_number(_up_obj);
         for (var _up_ti = 0; _up_ti < _up_tn; _up_ti++) {
-            var _up_inst = TrueInstanceFind(_up_obj, _up_ti);
+            var _up_inst = instance_find(_up_obj, _up_ti);
+            if (!instance_exists(_up_inst)) continue;
             if (floor(_up_inst.x) == array_get(_up_p, 1)
                 && floor(_up_inst.y) == array_get(_up_p, 2)) {
                 global.coopApplyingRemote = true;
@@ -1454,12 +1525,34 @@ switch (_cmd) {
     case CoopCmd.DROP:
         // An item appeared in the world. The peer already has it (or, if we are the
         // host, the world already spawned it) - we only mirror it.
+        //
+        // **Field order must match CoopSendDrop exactly: room first, then x and y.**
+        // It did not, and that was not cosmetic. This block used to read s32 x, s32 y,
+        // u8 room - the sender writes u8 room, s32 x, s32 y. So `_dx` swallowed the room
+        // byte as its top byte, `_dy` swallowed five bytes of the real x, and `_drm` was a
+        // slice of the real y, which is never 8 - so the room test below was always false
+        // and **every incoming drop was silently discarded**. Worse, `_dit` was a slice of
+        // a coordinate, i.e. an essentially arbitrary item id, and it reached DropItem()
+        // before the discard: `DropItem` looks up the item's data (sprite, name) by index,
+        // so an id past the end of the item table is an out-of-range native read - the
+        // `0xc0000005` at one fixed instruction (`offset 0x012c265f`) that killed all
+        // sixteen sessions of 2026-10-20, only while a peer was connected, only after the
+        // loot sync landed at 16:24, and more often the longer a session ran.
+        var _drm  = buffer_read(_buf, buffer_u8);
         var _dx   = buffer_read(_buf, buffer_s32);
         var _dy   = buffer_read(_buf, buffer_s32);
-        var _drm  = buffer_read(_buf, buffer_u8);
         var _dit  = buffer_read(_buf, buffer_u16);
         var _dstk = buffer_read(_buf, buffer_u16);
         if (instance_exists(objPlayer) && _drm != objPlayer.room) break;
+        // Belt and braces on the id, because the failure mode is a native fault and not a
+        // GML error: never hand DropItem an item id this build does not have. `Item.Count`
+        // is the size of the item database (F3 probe, live: 319), cached on first use
+        // because reading it costs a call and this runs per packet.
+        if (global.coopItemCount <= 0) CoopBuildItemDb();
+        if (_dit >= global.coopItemCount) {
+            Trace("Co-op: ignored a drop for unknown item #" + string(_dit) + ".");
+            break;
+        }
         var _dres = CoopApplyDrop(_dx, _dy, _dit, _dstk);
         if (_dres >= 0) {
             Trace("Co-op: <- drop item #" + string(_dit) + " x" + string(_dstk)
@@ -1469,11 +1562,17 @@ switch (_cmd) {
         break;
 
     case CoopCmd.PICKUP:
+        // Field order as in CoopSendPickup: room, x, y, item.
+        var _prm  = buffer_read(_buf, buffer_u8);
         var _px2  = buffer_read(_buf, buffer_s32);
         var _py2  = buffer_read(_buf, buffer_s32);
-        var _prm  = buffer_read(_buf, buffer_u8);
         var _pit  = buffer_read(_buf, buffer_u16);
         if (instance_exists(objPlayer) && _prm != objPlayer.room) break;
+        if (global.coopItemCount <= 0) CoopBuildItemDb();
+        if (_pit >= global.coopItemCount) {
+            Trace("Co-op: ignored a pickup for unknown item #" + string(_pit) + ".");
+            break;
+        }
         if (CoopApplyPickup(_px2, _py2, _pit) > 0) {
             Trace("Co-op: <- pickup item #" + string(_pit) + " at "
                   + string(_px2) + "," + string(_py2) + ".");
@@ -1481,9 +1580,10 @@ switch (_cmd) {
         break;
 
     case CoopCmd.RESOURCE_DESTROY:
+        // Field order as in CoopSendResourceDestroy: room, x, y, object.
+        var _rrm  = buffer_read(_buf, buffer_u8);
         var _rx   = buffer_read(_buf, buffer_s32);
         var _ry   = buffer_read(_buf, buffer_s32);
-        var _rrm  = buffer_read(_buf, buffer_u8);
         var _robj = buffer_read(_buf, buffer_u16);
         if (instance_exists(objPlayer) && _rrm != objPlayer.room) break;
         var _rnumb = CoopApplyResourceDestroy(_rx, _ry, _robj);
@@ -1491,6 +1591,21 @@ switch (_cmd) {
             Trace("Co-op: <- resource destroyed obj#" + string(_robj) + " at "
                   + string(_rx) + "," + string(_ry) + ".");
         }
+        break;
+
+    case CoopCmd.DEBUG_LINE:
+        // The peer's console, written down on ours. The channel exists because a mod in
+        // this game cannot write a file and Trace() never leaves the machine, so the only
+        // way a peer's long dump survives its own run is to travel on the wire (see
+        // CoopSendDebugLine). It was write-only until now - the sender existed, the switch
+        // had no case, so an incoming line fell through to "unknown packet id" and was
+        // lost. Caught by the wire-layout check in tools/check_gml.py, which requires every
+        // packet that is written to be read as well.
+        var _dbg_line = buffer_read(_buf, buffer_string);
+        Trace("Co-op peer: " + _dbg_line);
+        // Deliberately **no** echo back over the wire: two mods both forwarding what they
+        // receive is an infinite loop, and one of them is always the mock peer, which
+        // writes its lines to a file where we can read them anyway.
         break;
 
     default:

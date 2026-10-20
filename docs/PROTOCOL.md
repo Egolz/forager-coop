@@ -75,6 +75,18 @@ either machine can be the one that saw the change; the **host** is the one that
 applies it to its own world, and a client's copy is its own prediction. See the loot
 note below.
 
+**The field order in the table above is normative, and it is checked.**
+`tools/check_gml.py` compares, for every packet, the `buffer_write` order in the sender
+against the `buffer_read` order in its `case CoopCmd.*` and fails the build when they
+differ. It was written because they did differ, in the three packets above: the table says
+`u8 room, s32 x, s32 y, ...` and the readers of `DROP`, `PICKUP` and `RESOURCE_DESTROY` read
+`s32 x, s32 y, u8 room, ...` for a whole evening of live testing (2026-10-20). Nothing in
+GML complains about that - the buffers are untyped, a wrong read returns a wrong number - and
+the consequences were not cosmetic: the room test compared a slice of a coordinate against
+the room number and so **discarded every incoming packet**, while the item id given to
+`DropItem()` was a slice of a coordinate, an out-of-range native read that took the game
+down (`0xc0000005`, sixteen times, one fixed instruction). See `games/forager/NOTES.md`.
+
 Notes:
 
 - A structure travels as its **name** (`"forge"`). That is what the first slice shipped, and
@@ -88,7 +100,11 @@ Notes:
   COMPILE fails with "`ini_open` is not function or script"), and `file_text_*`,
   `buffer_save` and `show_debug_message` are not in the build at all. So the mod forwards a
   long dump (F10) to the peer, and `tools/coop_mockpeer.py` writes it to
-  `%TEMP%\coop_debug.txt`. It is diagnostics, not world state.
+  `%TEMP%\coop_debug.txt`. It is diagnostics, not world state. The channel was write-only
+  for most of a day: the sender existed and the packet switch had **no case for it**, so an
+  incoming line fell through to "unknown packet id" and was lost. The wire-layout check in
+  `tools/check_gml.py` caught it, because it also fails any packet that is written and never
+  read.
 - `intentId` is the client's own counter. It lets a client match a confirmation to the
   structure it placed optimistically, and a refusal to the thing it has to roll back.
 - `seq` is monotonically increasing per host session. A client applies a mutation only if

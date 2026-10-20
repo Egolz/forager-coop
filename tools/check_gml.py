@@ -81,6 +81,14 @@ NAMES = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 DEFINE = re.compile(r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)"
                     r"(?:\s*\(([^)]*)\))?", re.M)
 
+# Wire layout (see check_wire_layout). The command byte is captured by name so the
+# sender's byte can be compared with the `case` that reads it; everything else is a
+# buffer_* type in the order it is written or read.
+WRITE = re.compile(r"buffer_write\(\s*\w+\s*,\s*(CoopCmd|buffer_\w+)\s*,"
+                   r"\s*(?:CoopCmd\.(\w+))?")
+READ = re.compile(r"buffer_read\(\s*\w+\s*,\s*(buffer_\w+)\s*\)")
+CASE = re.compile(r"case\s+CoopCmd\.(\w+)\s*:")
+
 
 def strip_code(text: str) -> str:
     """Remove comments and string literals, keeping line structure."""
@@ -201,6 +209,70 @@ def check_var_names(name: str, line: int, body: str, where: str, problems: list[
                 seen[key] = line + off
 
 
+def check_wire_layout(files: list, problems: list[str]) -> None:
+    """Sender and receiver must read the fields of a packet in the same order.
+
+    This exists because they did not, and the cost was not a wrong number on screen.
+    Three of the five payload packets (DROP, PICKUP, RESOURCE_DESTROY) wrote
+    `u8 room, s32 x, s32 y, ...` and read `s32 x, s32 y, u8 room, ...`. The room
+    test then compared a slice of a coordinate against the room number, so every
+    incoming packet was discarded - and the item id handed to `DropItem()` was a
+    slice of a coordinate, i.e. an arbitrary number, which is an out-of-range native
+    read inside the game: `0xc0000005` at one fixed instruction, sixteen times in one
+    evening (live evidence 2026-10-20, see NOTES.md).
+
+    Nothing in the language catches this, the buffers are untyped and the wrong read
+    silently returns a wrong number, so the check has to be here.
+    """
+    # Every packet's write order, keyed by the command it announces. Scanned across the
+    # whole file rather than only inside `CoopSend*`: BYE and DEBUG_LINE are written from
+    # the middle of other functions (CoopDisconnect and CoopSendDebugLine), and a check
+    # that trusted the naming convention would quietly stop covering them.
+    writers: dict[str, tuple[str, list[str]]] = {}
+    readers: dict[str, list[str]] = {}
+    defines = {f: find_defines(strip_code(f.read_text(encoding="utf-8-sig", errors="replace")))
+               for f in files}
+
+    for f, blocks in defines.items():
+        where = f.name
+        for name, _line, body in blocks:
+            # A write whose value is `CoopCmd.X` starts a packet; the writes after it up to
+            # the next command are its fields. The command byte itself is not a field.
+            cur: str | None = None
+            fields: list[str] = []
+            for m in WRITE.finditer(body):
+                if m.group(2):                      # `... , CoopCmd.X);`
+                    if cur is not None:
+                        writers.setdefault(cur, (f"{where}:{name}", list(fields)))
+                    cur, fields = m.group(2), []
+                    continue
+                if cur is not None:
+                    fields.append(m.group(1))
+            if cur is not None:
+                writers.setdefault(cur, (f"{where}:{name}", list(fields)))
+        # the switch in CoopHandleData
+        text = "\n".join(b for _, _, b in blocks)
+        for m in CASE.finditer(text):
+            cmd = m.group(1)
+            rest = text[m.end():]
+            nxt = CASE.search(rest)
+            body = rest[: nxt.start()] if nxt else rest
+            readers[cmd] = [m2.group(1) for m2 in READ.finditer(body)]
+
+    for cmd, (wname, wrote) in sorted(writers.items()):
+        read = readers.get(cmd)
+        if read is None:
+            problems.append(f"packet {cmd}: {wname} sends it and no `case CoopCmd.{cmd}:` "
+                            f"reads it")
+            continue
+        if read != wrote:
+            problems.append(f"packet {cmd}: {wname} writes {wrote} but the reader reads "
+                            f"{read} - the field order must match")
+    for cmd in sorted(readers):
+        if cmd not in writers:
+            problems.append(f"packet {cmd}: a reader exists and no CoopSend* writes it")
+
+
 def check_calls(name: str, line: int, body: str, where: str, arities: dict[str, int],
                 symbols: bytes | None, missing: set[str], problems: list[str],
                 warns: list[str]) -> None:
@@ -302,6 +374,8 @@ def main(argv: list[str] | None = None) -> int:
             check_var_names(name, line, body, str(where), problems)
             check_calls(name, line, body, str(where), arities, symbols, missing,
                         problems, warns)
+
+    check_wire_layout(files, problems)
 
     for line in problems:
         print(f"ERROR {line}")

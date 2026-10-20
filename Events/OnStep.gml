@@ -150,15 +150,37 @@ if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
         }
     }
 
-    // A plant that was here last step and is gone now is a pick. Both halves are needed:
-    // the previous step says *what* and *where* it was (the instance is already gone and
-    // cannot be asked), the current step says whether it is still alive.
+    // A plant that was here last step and is gone now *might* be a pick - and might also be
+    // a plant the room merely **deactivated** because the player walked away from it, which
+    // is the common case, not the rare one. Telling those apart is what stops the repeat
+    // below, and it was measured live on 2026-10-20:
+    //
+    //     [18:50:42] <- RESOURCE_DESTROY obj#86 at 616,728 room 8
+    //     [18:50:43] <- RESOURCE_DESTROY obj#86 at 616,728 room 8
+    //     [18:50:49] <- RESOURCE_DESTROY obj#86 at 616,728 room 8
+    //     [18:50:55] <- RESOURCE_DESTROY obj#86 at 616,728 room 8
+    //
+    // Four announcements for one bush. The snapshot above is built from `instance_number`,
+    // which sees **only active** instances, so a bush that went inactive left the snapshot,
+    // was announced, came back into view, went inactive again, and was announced again.
+    //
+    // The test for "still there, just inactive" is the one pair this build already gives us
+    // and the snapshot deliberately does not use: `TrueInstanceNumber`/`TrueInstanceFind`
+    // see **deactivated** instances too. A bush that is absent from the active walk but
+    // present in the true walk was not picked - it was culled - so nothing is announced
+    // and, more importantly, the peer is never told to destroy a bush that still exists.
+    //
+    // Both halves are needed as before: the previous step says *what* and *where* it was
+    // (the active instance is already gone and cannot be asked), the true walk says whether
+    // it is really gone.
     for (var _p = 0; _p < array_length(_prev_id); _p += 1) {
         var _bush_alive = false;
         for (var _q = 0; _q < array_length(_now_id); _q += 1) {
             if (_now_id[_q] == _prev_id[_p]) { _bush_alive = true; break; }
         }
         if (_bush_alive) continue;
+        // Absent from the active walk - but is it gone, or only culled?
+        if (CoopPlantStillExists(_prev_obj[_p], _prev_x[_p], _prev_y[_p])) continue;
         CoopSendResourceDestroy(_prev_x[_p], _prev_y[_p], _prev_obj[_p]);
     }
 

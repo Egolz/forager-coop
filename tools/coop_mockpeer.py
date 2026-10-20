@@ -715,24 +715,37 @@ class Peer:
             # walked off and the mock was left behind, out of sight ("it appeared not next
             # to me"). So the anchor is **re-picked when the host gets far from it**: the
             # mock stands still while the owner is in the area, and reappears nearby when
-            # the owner has genuinely gone somewhere else. A 200 px leash is long enough
-            # that the mock reads as stationary and short enough that it is never lost.
+            # the owner has genuinely gone somewhere else.
+            #
+            # The offset is **two cells (32 px)**, not the 96 px of the first version: that
+            # was far enough to read as "somewhere over there" rather than "standing next
+            # to me" on a 1280x720 screen, where the player sprite is about 24 px tall.
+            #
+            # **No position is sent before the anchor exists.** The first version sent the
+            # fallback (620, 620) - an arbitrary point in the world - and the host drew the
+            # puppet there, so the mock could appear far from the owner and only then jump
+            # to the right place. The host draws nothing until a position arrives, so
+            # waiting is free and correct.
             #
             # The build spots are a different thing and keep using the host's live position:
             # the host validates them, and a build that lands where the owner is standing is
             # the only placement test worth running.
             if self.player is not None:
                 if self.anchor is None:
-                    self.anchor = (self.player[0] - 96, self.player[1])
+                    self.anchor = (self.player[0] - 32, self.player[1])
                 else:
                     _dx = self.player[0] - self.anchor[0]
                     _dy = self.player[1] - self.anchor[1]
-                    if _dx * _dx + _dy * _dy > 200 * 200:
-                        self.anchor = (self.player[0] - 96, self.player[1])
+                    if _dx * _dx + _dy * _dy > 128 * 128:
+                        self.anchor = (self.player[0] - 32, self.player[1])
                         log(f"   re-anchoring at {self.anchor} - the host moved away")
-            ax, ay = self.anchor if self.anchor is not None else (620, 620)
-            self.px, self.py = ax, ay
-            self.send(pos(ax, ay, angle=0, facing=1, sprite=-1, image=0, room=self.room))
+            if self.anchor is None:
+                ax = ay = None
+            else:
+                ax, ay = self.anchor
+                self.px, self.py = ax, ay
+            if ax is not None:
+                self.send(pos(ax, ay, angle=0, facing=1, sprite=-1, image=0, room=self.room))
         # ask the host to build something; retry other spots on a spot refusal
         # (water or occupancy), and after a success start the next round, so a run
         # shows the refusal *and* a build - and, with a second round, a spot that is

@@ -39,7 +39,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.36-m3c";
+global.coopVersion  = "0.0.37-m3d";
 global.coopProtocol = 5;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -105,6 +105,19 @@ global.coopName     = "player";  // what we call ourselves; see CoopLocalName be
 global.coopPeerName = "";        // what the peer called themselves ("peer" until known)
 // Diagnostic (M3.1): the last "probe peer" line, so the diagnostic only reports on change.
 global.coopPeerKey  = "";
+// M3.1: the last **usable** sprite index seen, for the local player and for the peer.
+//
+// The peer's `POS` carries the sender's `objPlayer.sprite_index`, and in this build that value
+// is **not** a sprite index: it measured 0 on 19366 frames and 1 on 7354 (live, 2026-10-21), and
+// the game's sprites are numbered from about 1000. So it is a flag, not an asset, and using it
+// as-is made the puppet blink in and out - which is exactly what the owner reported.
+//
+// Holding the last usable value makes the puppet steady. The body probe below finds the
+// sprite that actually belongs to the player, which is the better answer; the latch is what
+// makes the puppet visible in the meantime.
+global.coopLastLocalSprite = 0;
+global.coopLastPeerSprite  = 0;
+global.coopBodyProbeDone   = false;
 
 // Temporary: how many resource-spawn probe lines have gone out (see
 // Events/OnResourceSpawn.gml). Reset each session; the probe is removed when M2.2's

@@ -47,8 +47,25 @@ if (objPlayer.room != global.coopPeer.room) exit;
 // So the peer's sprite is used when it has one and the **host's own player sprite** stands in
 // when it does not. Falling back to a real sprite (rather than to a circle or a primitive) keeps
 // this file free of primitives, which is worth having anyway.
+//
+// **But the value is latched, and that is the fix for the blinking.** The peer's `POS` carries
+// the sender's `objPlayer.sprite_index`, and in this build that value is **not** a sprite
+// index: it measured 0 on 19366 frames and 1 on 7354 (live, 2026-10-21), while the game's
+// sprites are numbered from about 1000. It is a flag, not an asset. Taking it as-is made the
+// puppet blink in and out - exactly what the owner reported ("it appears only when I walk"):
+// the value was usable only part of the time.
+//
+// So the last **usable** value is held and reused, and a peer that sends a real sprite index is
+// used as sent.
 var _spr = global.coopPeer.sprite;
-if (_spr <= 0) _spr = objPlayer.sprite_index;
+if (_spr > 0) {
+    global.coopLastPeerSprite = _spr;
+} else {
+    _spr = objPlayer.sprite_index;
+    if (_spr > 0) global.coopLastLocalSprite = _spr;
+    else _spr = global.coopLastLocalSprite;
+    if (_spr <= 0) _spr = global.coopLastPeerSprite;
+}
 if (_spr <= 0) exit;
 
 var _x = global.coopPeer.x;
@@ -100,6 +117,6 @@ var _yd  = _y - 30;                              // where the sprite is drawn
 var _top = _yd - sprite_get_yoffset(_spr);       // the sprite's top edge
 
 draw_set_halign(fa_center);
-draw_text_ext_transformed_color(_x, _top - 16, _name, 12, 200, 1, 1, 0,
+draw_text_ext_transformed_color(_x, _top - 15, _name, 10, 200, 1, 1, 0,
                                 c_white, c_white, c_white, c_white, 1);
 draw_set_halign(fa_left);

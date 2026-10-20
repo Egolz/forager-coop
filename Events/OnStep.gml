@@ -120,6 +120,14 @@ if (global.coopPeer.seen && instance_exists(objPlayer)) {
         global.coopPeerKey = _pk;
         CoopSendDebugLine("probe peer " + _pk);
     }
+
+    // The body probe runs once, as soon as there is a peer to draw. It answers the question
+    // the "probe peer" line raised: the sprite index the game reports for the player is a
+    // flag, not an asset, so which sprite is the body?
+    if (!global.coopBodyProbeDone) {
+        global.coopBodyProbeDone = true;
+        CoopProbeBody();
+    }
 }
 
 // Packet corpus: the whole recent operation ring goes out whenever a new token was added.

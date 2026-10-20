@@ -1111,6 +1111,56 @@ for (var _pg_j = 0; _pg_j < _pg_m; _pg_j += 1) {
 }
 Trace("---");
 
+#define CoopProbeBody()
+// Which sprite is the player's body, really?
+//
+// The peer's `POS` packet carries the sender's `objPlayer.sprite_index`, and the live
+// measurement of 2026-10-21 says that value is **not a sprite index in this build**: it read
+// 0 on 19366 frames and 1 on 7354, while the game's sprites are numbered from about 1000
+// (a furnace reports 1097). It is a flag, not an asset - so a peer that sent it could not be
+// drawn, and the puppet that stood in for it blinked in and out.
+//
+// The real body sprite is somewhere in the world: an instance standing at the player's own
+// position, carrying a sprite index in the game's own numbering. This walks the object
+// indices around the player's and reports every instance near it with that instance's sprite
+// and image index, so the answer is a fact rather than a guess.
+//
+// Read-only: nothing is created, moved or written. Runs once per session, and needs no new
+// hotkey - the answer belongs in the log the owner is already reading.
+if (!instance_exists(objPlayer)) exit;
+
+var _pb_lines = [];
+array_push(_pb_lines, "=== body probe " + global.coopVersion + " ===");
+array_push(_pb_lines, "player object #" + string(objPlayer.object_index)
+           + " '" + object_get_name(objPlayer.object_index) + "'"
+           + " sprite " + string(objPlayer.sprite_index)
+           + " image " + string(objPlayer.image_index)
+           + " at " + string(floor(objPlayer.x)) + "," + string(floor(objPlayer.y)));
+
+var _pb_lo = objPlayer.object_index - 60;
+if (_pb_lo < 1) _pb_lo = 1;
+var _pb_hi = objPlayer.object_index + 60;
+for (var _pb_o = _pb_lo; _pb_o <= _pb_hi; _pb_o++) {
+    var _pb_n = instance_number(_pb_o);
+    if (_pb_n <= 0) continue;          // also skips object indices that do not exist
+    for (var _pb_i = 0; _pb_i < _pb_n; _pb_i++) {
+        var _pb_s = instance_find(_pb_o, _pb_i);
+        if (!instance_exists(_pb_s)) continue;
+        var _pb_d = point_distance(_pb_s.x, _pb_s.y, objPlayer.x, objPlayer.y);
+        if (_pb_d > 120) continue;
+        array_push(_pb_lines, "  #" + string(_pb_o) + " '" + object_get_name(_pb_o) + "'"
+                   + " sprite " + string(_pb_s.sprite_index)
+                   + " image " + string(_pb_s.image_index)
+                   + " at " + string(floor(_pb_s.x)) + "," + string(floor(_pb_s.y))
+                   + " d " + string(floor(_pb_d)));
+    }
+}
+array_push(_pb_lines, "=== body probe end ===");
+var _pb_m = array_length(_pb_lines);
+for (var _pb_j = 0; _pb_j < _pb_m; _pb_j += 1) {
+    CoopSendDebugLine(_pb_lines[_pb_j]);
+}
+
 #define CoopProbeWorld()
 // F10. Read-only. Dumps what the game thinks a structure is next to what our
 // table thinks. The console gets the short half; the whole 64-entry

@@ -409,6 +409,9 @@ class Peer:
         self.player = None          # last position the game reported
         self.pos_logged = None      # last position we bothered to print
         self.px, self.py = 620, 620 # where our own puppet currently is
+        # Where the puppet **stands**. Picked once, when the mock first learns where the host
+        # is, and then left alone - see tick().
+        self.anchor: tuple[int, int] | None = None
         self.structs: list[tuple[int, str]] = []
         self.items: list[tuple[int, str]] = []
         self.loot_seen: list[str] = []   # loot packets the host announced (M2.2)
@@ -700,16 +703,26 @@ class Peer:
                 self.send(ping(self.nonce))
                 log(f"-> PING nonce={self.nonce}")
                 self.last_ping = now
-            # Walk our puppet in a small square just left of the game's player,
-            # so the marker is on screen and anything we ask for lands near both.
-            # Falls back to a fixed spot until the game reports its position.
-            bx, by = self.player or (620, 620)
-            bx -= 96
-            t = int(now) % 40
-            x = bx + (t if t < 10 else 10 if t < 20 else (30 - t) if t < 30 else 0)
-            y = by + (0 if t < 10 else (t - 10) if t < 20 else 10 if t < 30 else (40 - t))
-            self.px, self.py = x, y
-            self.send(pos(x, y, angle=0, facing=1, sprite=-1, image=0, room=self.room))
+            # **Stand still.** The mock is a stand-in for a second player, not a player: it has
+            # no walk command, so it has no business following the host.
+            #
+            # The earlier version walked a small square around `self.player` - the **host's**
+            # position - which glued the puppet to the host's camera. The owner noticed it as
+            # "the mock follows the player's camera" (live, 2026-10-21), and it is wrong: a
+            # peer that is not told to walk does not walk.
+            #
+            # So the anchor is picked **once**, when the mock first learns where the host is,
+            # and then it stays where it was put. It starts next to the host, which is what
+            # makes it visible, and it does not follow from there.
+            #
+            # The build spots are a different thing and keep using the host's live position:
+            # the host validates them, and a build that lands where the owner is standing is
+            # the only placement test worth running.
+            if self.anchor is None and self.player is not None:
+                self.anchor = (self.player[0] - 96, self.player[1])
+            ax, ay = self.anchor if self.anchor is not None else (620, 620)
+            self.px, self.py = ax, ay
+            self.send(pos(ax, ay, angle=0, facing=1, sprite=-1, image=0, room=self.room))
         # ask the host to build something; retry other spots on a spot refusal
         # (water or occupancy), and after a success start the next round, so a run
         # shows the refusal *and* a build - and, with a second round, a spot that is

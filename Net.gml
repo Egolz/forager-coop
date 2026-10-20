@@ -1223,6 +1223,7 @@ Trace("--------------------");
 
 #define CoopHandleData(_buf)
 var _cmd = buffer_read(_buf, buffer_u8);
+global.coopPhase = 20 + _cmd;   // diagnostic: which packet we are acting on (21..36)
 
 switch (_cmd) {
     case CoopCmd.HELLO:
@@ -1553,8 +1554,7 @@ switch (_cmd) {
             Trace("Co-op: ignored a drop for unknown item #" + string(_dit) + ".");
             break;
         }
-        var _dres = CoopApplyDrop(_dx, _dy, _dit, _dstk);
-        if (_dres >= 0) {
+        var _dres = CoopApplyDrop(_dx, _dy, _dit, _dstk);        if (_dres >= 0) {
             Trace("Co-op: <- drop item #" + string(_dit) + " x" + string(_dstk)
                   + " at " + string(_dx) + "," + string(_dy)
                   + " (" + CoopItemName(_dit) + ").");

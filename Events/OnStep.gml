@@ -39,8 +39,18 @@ global.coopTick += 1;
 if (global.coopTick mod 300 == 0) {
     CoopSendDebugLine("probe tick " + string(global.coopTick)
                       + " rx " + string(global.coopRxCount)
+                      + " phase " + string(global.coopPhase)
                       + " player " + string(instance_exists(objPlayer)));
 }
+
+// Phase markers for the native crash. The fault kills the process without reaching
+// error.log, so the only evidence is what the peer already received - and the last phase
+// number to arrive names the code the game died in. Cheap (an assignment) and removed
+// together with the rest of the diagnostics.
+//
+// Deliberately **not** reset each frame: it is set immediately before each operation that
+// could fault, so whatever the peer last heard is the operation the game was inside when it
+// died. A reset would only ever answer "we were in OnStep", which is known already.
 
 // heartbeat: keep at most one ping in flight
 if (global.coopTick mod 90 == 0 && global.coopPingSentAt < 0) {
@@ -54,7 +64,10 @@ if (global.coopPingSentAt >= 0 && current_time - global.coopPingSentAt > 5000) {
 }
 
 // presence: ~20 packets/second, cosmetic and latency-sensitive
-if (global.coopTick mod 3 == 0) CoopSendPos();
+if (global.coopTick mod 3 == 0) {
+    global.coopPhase = 13;   // sending our position
+    CoopSendPos();
+}
 
 // ============================================================================
 // Bush/pickable-plant sync (M2.2, live 2026-10-20). **Working sync, not a probe.**
@@ -128,6 +141,7 @@ if (global.coopBushObj == -2) {
 }
 
 if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
+    global.coopPhase = 10;   // walking the plant snapshot
     var _prev_obj = global.coopBushObjAt;   // object index of each plant, last step
     var _prev_id  = global.coopBushIds;     // its instance id
     var _prev_x   = global.coopBushXs;      // its x
@@ -180,7 +194,9 @@ if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
         }
         if (_bush_alive) continue;
         // Absent from the active walk - but is it gone, or only culled?
+        global.coopPhase = 11;   // asking whether a vanished plant is really gone
         if (CoopPlantStillExists(_prev_obj[_p], _prev_x[_p], _prev_y[_p])) continue;
+        global.coopPhase = 12;   // announcing the picked plant
         CoopSendResourceDestroy(_prev_x[_p], _prev_y[_p], _prev_obj[_p]);
     }
 

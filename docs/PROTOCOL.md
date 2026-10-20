@@ -81,11 +81,13 @@ against the `buffer_read` order in its `case CoopCmd.*` and fails the build when
 differ. It was written because they did differ, in the three packets above: the table says
 `u8 room, s32 x, s32 y, ...` and the readers of `DROP`, `PICKUP` and `RESOURCE_DESTROY` read
 `s32 x, s32 y, u8 room, ...` for a whole evening of live testing (2026-10-20). Nothing in
-GML complains about that - the buffers are untyped, a wrong read returns a wrong number - and
-the consequences were not cosmetic: the room test compared a slice of a coordinate against
-the room number and so **discarded every incoming packet**, while the item id given to
-`DropItem()` was a slice of a coordinate, an out-of-range native read that took the game
-down (`0xc0000005`, sixteen times, one fixed instruction). See `games/forager/NOTES.md`.
+GML complains about that - the buffers are untyped, a wrong read returns a wrong number -
+and the room byte came back as `0`, so the room test failed first and **every incoming loot
+and resource packet was silently discarded**. That is the whole effect of that bug: it is
+*not* the cause of the native crash that was investigated the same evening, which is still
+open (a wrong-order read shifts the item id too, but it survives the one-byte shift intact,
+and `break` ran before the apply path). See `games/forager/NOTES.md` for the crash evidence
+and for the phase marker that is meant to name it.
 
 Notes:
 

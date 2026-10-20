@@ -39,7 +39,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.27-m2y";
+global.coopVersion  = "0.0.28-m2z";
 global.coopProtocol = 4;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY)
@@ -92,6 +92,11 @@ global.coopTick        = 0;
 // "the game is gone" for the OnRoomLoad probes, and the same trick is what will say whether
 // the crash is tied to processing a packet. Remove with the rest of the diagnostics.
 global.coopRxCount     = 0;
+// Diagnostic (native crash, 2026-10-20): the number of the operation the game was last
+// inside. It is announced every ~5 s to the peer (see OnStep), and because a native fault
+// never reaches error.log, the last value to arrive is the only record of where the game
+// died. Set - never reset - right before each operation that could fault.
+global.coopPhase       = 0;
 
 // ---------------------------------------------------------------------------
 // M2: host-authoritative world state.

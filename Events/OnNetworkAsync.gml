@@ -37,5 +37,6 @@ if (_type == network_type_data) {
     // a double free does to a heap. It has been removed, and this comment stays so the next
     // reader does not "fix" the same non-leak again.
     global.coopRxCount += 1;   // diagnostic: how many packets this side has handled (see OnStep)
+    global.coopPhase = 20;     // about to decode and act on a packet
     CoopHandleData(async_load[? "buffer"]);
 }

@@ -39,20 +39,37 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.31-m2ac";
+global.coopVersion  = "0.0.32-m2ad";
 global.coopProtocol = 4;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY)
                            // (5 was used by a rejected CMD experiment and is free again)
 global.coopPort     = 6511;
 global.coopPlaceRange = 448;   // see Net.gml: how far a client may place from itself
-global.coopSolidRadius = 24;   // see Net.gml: how close counts as the same build-cell
-// How much room a built thing needs. A 2x2 structure occupies a 48x48 block of the
-// 24 px build grid, so its cell centres sit 24 px out from the point the game handed
-// us - not 12. See the water and occupancy checks in CoopHandleData, which used 12 px
-// and therefore only ever sampled *inside* what the live probe now shows is a 4x4 tile
-// structure sitting on a 24 px grid.
-global.coopFootprint   = 24;
+global.coopSolidRadius = 16;   // see Net.gml: how close counts as the same build-cell
+// How much room a built thing needs, and what the world is tiled at.
+//
+// **16, not 24, and this is measured rather than assumed.** The build-cell was 24 for most of
+// this mod's life on the strength of a reading that turned out to be circular: every structure
+// coordinate sampled was a multiple of 24, so 24 "confirmed itself" - but every one of those
+// samples had been *created by this mod*, which snaps to 24 because it was told to. A furnace
+// the owner built by hand (live, 2026-10-20 19:19) landed at 656,608 and settled the question:
+// it is 8 px off the mod's grid on both axes, which is exactly the "half a cell up" reported.
+//
+// The world's real tiling comes from the objects the **game** places - rocks, trees, bushes,
+// which the map itself spawns and no mod touched. Across 19 such spawns:
+//
+//   smallest non-zero gap between neighbours: 16 px on X and 16 px on Y (gaps were 16 and 32)
+//   every x and y remainder mod 16 was a single constant, mod 8 was 0, mod 12/24 was noise
+//
+// i.e. the world is tiled at 16 px. The two families differ only in which point they report:
+// a natural object reports its cell (remainder 8, the cell centre), a structure reports its
+// top-left block corner (remainder 0). Both are the same 16 px lattice; 24 is not on it.
+//
+// So a footprint of 2x2 cells is 32x32 px, and the offsets used to sample the covered area are
+// +/-8 from the block centre - not +/-12, which was the 24-grid value and sampled half a cell
+// outside the structure it was supposed to describe.
+global.coopFootprint   = 16;
 global.coopSolidObj    = -2;   // -2 = not resolved yet (kept as the "have we looked" flag)
 global.coopSolidObjs   = [];   // the concrete object families that block a build cell: see
                                // CoopSolidNear - `instance_number(parSolid)` is 0 in this

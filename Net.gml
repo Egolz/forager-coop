@@ -769,7 +769,7 @@ return _sld_hits;
 
 #define CoopSolidInCell(_x, _y)
 // -> how many solids or living things stand in the **same build-cell** as (_x,_y).
-//    A cell is 24 px; `floor(v / 24)` is its index, which is how this differs from
+//    A cell is 16 px; `floor(v / 16)` is its index, which is how this differs from
 //    CoopSolidNear's "within a radius" question.
 //
 // This exists because a radius cannot answer "is this cell taken". The placement check
@@ -779,10 +779,15 @@ return _sld_hits;
 // reduced to its own cell and compared, so each solid is counted at most once, and only
 // when it really shares ground with the structure being built.
 //
+// The cell is **16 px**, which the game's own spawns settled (see Main.gml: 19 natural
+// objects, smallest gap 16 on both axes, every remainder mod 16 a single constant). The
+// earlier 24 came from sampling structures this mod had itself created, so it agreed with
+// itself and not with the world.
+//
 // The distance variant is kept: it is the right question for "is anything standing near
 // the player", and it is already live-tested.
-var _sic_cell_x = floor(_x / 24);
-var _sic_cell_y = floor(_y / 24);
+var _sic_cell_x = floor(_x / 16);
+var _sic_cell_y = floor(_y / 16);
 var _sic_hits = 0;
 if (global.coopSolidObj == -2) CoopSolidNear(0, 0);   // resolve the family lists once
 for (var _sic_si = 0; _sic_si < array_length(global.coopSolidObjs); _sic_si += 1) {
@@ -790,8 +795,8 @@ for (var _sic_si = 0; _sic_si < array_length(global.coopSolidObjs); _sic_si += 1
     var _sic_n = instance_number(_sic_sobj);
     for (var _sic_i = 0; _sic_i < _sic_n; _sic_i += 1) {
         var _sic_inst = instance_find(_sic_sobj, _sic_i);
-        if (floor(_sic_inst.x / 24) == _sic_cell_x
-            && floor(_sic_inst.y / 24) == _sic_cell_y) _sic_hits += 1;
+        if (floor(_sic_inst.x / 16) == _sic_cell_x
+            && floor(_sic_inst.y / 16) == _sic_cell_y) _sic_hits += 1;
     }
 }
 for (var _sic_li = 0; _sic_li < array_length(global.coopLivingObjs); _sic_li += 1) {
@@ -799,8 +804,8 @@ for (var _sic_li = 0; _sic_li < array_length(global.coopLivingObjs); _sic_li += 
     var _sic_ln = instance_number(_sic_lobj);
     for (var _sic_lj = 0; _sic_lj < _sic_ln; _sic_lj += 1) {
         var _sic_linst = instance_find(_sic_lobj, _sic_lj);
-        if (floor(_sic_linst.x / 24) == _sic_cell_x
-            && floor(_sic_linst.y / 24) == _sic_cell_y) _sic_hits += 1;
+        if (floor(_sic_linst.x / 16) == _sic_cell_x
+            && floor(_sic_linst.y / 16) == _sic_cell_y) _sic_hits += 1;
     }
 }
 return _sic_hits;
@@ -991,6 +996,93 @@ for (var _ds_i = 0; _ds_i < _ds_n; _ds_i++) {
     }
     Trace("#" + string(_ds_i) + "  " + global.coopStructNames[_ds_i]
           + "  (" + _ds_txt + " isStruct=" + _ds_anc + ")");
+}
+Trace("---");
+
+#define CoopProbeGrid()
+// F4. Read-only. **What is the world's own grid, and where is a structure pinned to it?**
+//
+// Why this exists rather than another reading of the same furnace. The build-cell of 24 px
+// was never measured - it was *inferred* from structure coordinates the mod itself had
+// created, and that is circular: the mod writes 24-multiples because the mod chose to, so
+// every sample "confirmed" the grid that produced it. The live run of 2026-10-20 19:19 broke
+// the circle by chance: a furnace the **owner** built by hand landed at 656,608, which is
+// `24*27+8, 24*25+8` - eight pixels off the grid the mod believes in, on both axes. That is
+// the "half a cell up" the owner reported, and it says the mod's 24 is wrong (or off by an
+// origin), not that the game misplaced anything.
+//
+// So this prints many samples instead of one, and prints them as **remainders**, because a
+// remainder is what a grid claim is. Read together, the columns say which cell size every
+// structure agrees on, and by how much that shared grid is offset:
+//
+//   * a column that is 0 for every row is the real cell size;
+//   * a column that is a constant non-zero for every row is the real cell size **plus that
+//     offset** - which is the case a single sample cannot distinguish from noise;
+//   * no such column means coordinates are sprite origins, and the next thing to measure is
+//     the sprite, not the world.
+//
+// It walks the game's own `parStructure` (the ground truth for "is this a building"), so it
+// samples every structure in the room, not just the kinds our table happens to know. Read-only:
+// nothing is created, moved or written.
+if (!instance_exists(objPlayer)) {
+    Trace("Co-op: F4 needs a loaded world.");
+    exit;
+}
+
+var _pg_lines = [];
+array_push(_pg_lines, "=== grid probe " + global.coopVersion + " ===");
+array_push(_pg_lines, "player " + string(floor(objPlayer.x)) + "," + string(floor(objPlayer.y))
+           + " depth " + string(objPlayer.depth)
+           + " mod8 " + string(objPlayer.x mod 8) + "," + string(objPlayer.y mod 8)
+           + " mod16 " + string(objPlayer.x mod 16) + "," + string(objPlayer.y mod 16));
+
+var _pg_par = asset_get_index("parStructure");
+if (_pg_par < 0) {
+    array_push(_pg_lines, "parStructure not in this build - nothing to sample");
+} else {
+    var _pg_n = instance_number(_pg_par);
+    array_push(_pg_lines, "parStructure #" + string(_pg_par) + " instances " + string(_pg_n));
+    // Remainders mod 8 / 12 / 16 / 24 for each, one row per structure. Those four cover every
+    // cell size the game could plausibly use (8 = half of 16, 12 = half of 24, 24 = the
+    // mod's guess, 16 = the only one that divides the tiles the map is drawn on).
+    for (var _pg_i = 0; _pg_i < _pg_n; _pg_i++) {
+        var _pg_s = instance_find(_pg_par, _pg_i);
+        array_push(_pg_lines,
+            "  " + object_get_name(_pg_s.object_index)
+            + " " + string(floor(_pg_s.x)) + "," + string(floor(_pg_s.y))
+            + " | mod8 "  + string(_pg_s.x mod 8)  + "," + string(_pg_s.y mod 8)
+            + " mod12 "  + string(_pg_s.x mod 12) + "," + string(_pg_s.y mod 12)
+            + " mod16 "  + string(_pg_s.x mod 16) + "," + string(_pg_s.y mod 16)
+            + " mod24 "  + string(_pg_s.x mod 24) + "," + string(_pg_s.y mod 24)
+            + " | depth " + string(_pg_s.depth));
+    }
+}
+
+// The same question for dropped items, which the game also places: an item origin and a
+// structure origin need not agree, and picking one cannot be assumed to hold for the other.
+var _pg_res = asset_get_index("parResource");
+if (_pg_res >= 0) {
+    var _pg_rn = instance_number(_pg_res);
+    var _pg_rl = _pg_rn;
+    if (_pg_rl > 16) _pg_rl = 16;
+    array_push(_pg_lines, "parResource instances " + string(_pg_rn) + " (first " + string(_pg_rl) + "):");
+    for (var _pg_ri = 0; _pg_ri < _pg_rl; _pg_ri++) {
+        var _pg_r = instance_find(_pg_res, _pg_ri);
+        array_push(_pg_lines,
+            "  " + object_get_name(_pg_r.object_index)
+            + " " + string(floor(_pg_r.x)) + "," + string(floor(_pg_r.y))
+            + " | mod8 "  + string(_pg_r.x mod 8)  + "," + string(_pg_r.y mod 8)
+            + " mod16 "  + string(_pg_r.x mod 16) + "," + string(_pg_r.y mod 16)
+            + " mod24 "  + string(_pg_r.x mod 24) + "," + string(_pg_r.y mod 24));
+    }
+}
+
+array_push(_pg_lines, "=== grid probe end ===");
+var _pg_m = array_length(_pg_lines);
+Trace("--- Co-op grid probe ---");
+for (var _pg_j = 0; _pg_j < _pg_m; _pg_j += 1) {
+    Trace("  " + _pg_lines[_pg_j]);
+    CoopSendDebugLine(_pg_lines[_pg_j]);
 }
 Trace("---");
 
@@ -1492,27 +1584,32 @@ switch (_cmd) {
             }
         }
 
-        // **Snap the request to the world's own grid.** The world is tiled at 24 px: every
-        // coordinate a structure actually occupies in this build is a multiple of 24 (the
-        // furnace in the live probes sat at 672,672 and 688,688; the plants at 600,648 and
-        // 696,648). A client cannot be trusted to send such a point - the mock reports its
-        // puppet's exact position and adds an offset that is a multiple of 16, so its asks
-        // arrive at coordinates like 665,578 and 651,649, which fall *between* cells and put
-        // the structure off-grid. Nothing downstream wants the raw value: the depth is
-        // already a pure function of y, and the wash of "wrong place" reports live
-        // 2026-10-20 all trace back to a structure created at a non-grid point.
+        // **Snap the request to the world's own grid.** The world is tiled at **16 px** - not
+        // the 24 this used to claim. That 24 was a circular reading: the samples that
+        // "confirmed" it were structures *this mod* had created, so they were 24-multiples
+        // because the mod chose to write 24-multiples. The objects the **game** places broke
+        // the circle (live run 2026-10-20, 19 natural spawns - rocks, trees, bushes, untouched
+        // by any mod):
         //
-        // Rounding to the nearest multiple of 24 (`round(_x / 24) * 24`) is the whole fix,
-        // and it is deliberately *not* a search for a nearby free cell: the owner's chosen
-        // behaviour is that a spot which cannot take the structure is **refused**, so the
-        // player is told and can aim again, rather than having their building silently
-        // shift somewhere else.
-        var _sn_x = round(_ix / 24) * 24;
-        var _sn_y = round(_iy / 24) * 24;
+        //   smallest non-zero gap between neighbours: 16 px on X and on Y (gaps were 16 and 32)
+        //   every x and every y remainder mod 16 was one constant; mod 12 and mod 24 were noise
+        //
+        // and a furnace the owner built by hand settled what the offset is: it landed at
+        // 656,608 = `16*41, 16*38`, exactly on that lattice, while the mod's own furnaces sat
+        // at 24-multiples like 624,600 - which is 8 px off on Y, the "half a cell up" reported.
+        //
+        // A client cannot be trusted to send a grid point either: the mock reports its puppet's
+        // position plus an offset and its asks arrive between cells. Rounding to the nearest
+        // multiple of 16 is the whole fix, and it is deliberately *not* a search for a nearby
+        // free cell - the owner's chosen behaviour is that a spot which cannot take the
+        // structure is **refused**, so the player is told and can aim again, rather than having
+        // their building silently shift somewhere else.
+        var _sn_x = round(_ix / 16) * 16;
+        var _sn_y = round(_iy / 16) * 16;
         if (_sn_x != _ix || _sn_y != _iy) {
             Trace("Co-op: snapped intent #" + string(_iid) + " from "
                   + string(_ix) + "," + string(_iy) + " to "
-                  + string(_sn_x) + "," + string(_sn_y) + " (the 24 px world grid).");
+                  + string(_sn_x) + "," + string(_sn_y) + " (the 16 px world grid).");
         }
         _ix = _sn_x;
         _iy = _sn_y;
@@ -1523,44 +1620,21 @@ switch (_cmd) {
         // `WaterCollision(716,630) = 0` compiled and ran, so the wrapper path was
         // never needed). Non-zero means water, so the intent is refused.
         //
-        // **The whole footprint has to be asked, and at the right distance.** A furnace is
-        // 2x2 cells (~48x48 px at the game's 24 px build-cell), so a single call at (_ix,_iy)
-        // only clears the one cell the structure is centred on and lets an edge hang over
-        // water - reported live 2026-10-20 ("can place a furnace with 1-3 tiles of water
-        // under it"). The first fix for that asked four points at +/-12 px and was **still
-        // wrong**, which the live run of 2026-10-20 19:16 proved in the only way that counts:
+        // **The whole footprint has to be asked, and at the right distance.** A structure is
+        // 2x2 cells; at 16 px per cell that is a 32x32 block, so the four cells it covers have
+        // centres 8 px out from the snapped point, not 12. `+/-8` is the number that belongs to
+        // this grid; `+/-12` was the 24-grid value and sampled half a cell *outside* the
+        // structure it was describing, which is how a mostly-dry spot read as water.
         //
-        //   -> INTENT_PLACE 'печь' at 672,672   <- the known-free cell on land
-        //   <- INTENT_REJECTED #28032: 'that spot is already occupied (1 of 4 tiles)'
-        //
-        // +/-12 px from a grid point lands on the **shared corner of four tiles** - the one
-        // place in a 24 px grid where "which tile is this?" has no answer, and the game's
-        // tile test evidently resolves the ambiguity differently from the way its own
-        // builder does.
-        //
-        // The live spawn probe of 19:27 settles the geometry, and it says the point is the
-        // structure's **centre**, not a corner:
-        //
-        //   probe spawn: obj#109 'objFurnace' ... at 600,600 mod24 0,0 ...
-        //
-        // The game's own build path puts a 48 px furnace down on a multiple of 24 and reports
-        // success, so the 2x2 block spans [x-24, x+24) - four cells, whose centres sit at
-        // x-12 and x+12. Those are the four points below. The whole 48 px square is then
-        // covered by masking each cell centre across all 24 px cells it can fall in
-        // (`floor((c + 12) / 24)`), which is a **9-cell** test - the four cells the structure
-        // occupies plus their rim - because a structure that hangs even one cell over water
-        // is what the owner reported and what this has to refuse. The previous +/-12 offset
-        // was a corner sample and produced a false "occupied" on a known-free cell; this one
-        // cannot, because every sample is strictly inside a cell.
+        // Every sample is a cell centre, so it is strictly inside its cell: there is no
+        // corner sample here. Sampling a corner is precisely the error the earlier +/-12
+        // version made on the old grid - a grid point plus half a cell is the shared corner of
+        // four tiles, the one place where "which tile is this?" has no answer.
         var _wq_water = 0;
         for (var _wq_dx = -1; _wq_dx <= 1; _wq_dx += 2) {
             for (var _wq_dy = -1; _wq_dy <= 1; _wq_dy += 2) {
-                // The four cells the 2x2 block covers, reduced to cell centres the way
-                // CoopSolidInCell reduces a solid: floor((centre + 12) / 24) is the cell
-                // index of a point _ix +/- 12, so this asks the same four cells the
-                // occupancy check asks, and no corner is ever sampled.
-                var _wq_cx = floor((_ix + _wq_dx * 12 + 12) / 24) * 24;
-                var _wq_cy = floor((_iy + _wq_dy * 12 + 12) / 24) * 24;
+                var _wq_cx = _ix + _wq_dx * 8;
+                var _wq_cy = _iy + _wq_dy * 8;
                 if (WaterCollision(_wq_cx, _wq_cy) != 0) _wq_water += 1;
             }
         }
@@ -1591,11 +1665,13 @@ switch (_cmd) {
         // can only express "this solid is near", and near is not the question.
         //
         // So the test is now the thing it was always meant to be: **tile membership**. The
-        // structure is 2x2 cells centred on (_ix,_iy), so it covers the four cells whose
-        // centres are (_ix +/- 12, _iy +/- 12); a solid blocks the build when the cell it
-        // stands in is one of those four. `floor(v / 24)` is the cell index of any point,
-        // which is how a solid's own position is reduced to its cell - no radius, no
-        // overlap, and each solid counted at most once because only its own cell is asked.
+        // structure is 2x2 cells covering a 32x32 px block centred on (_ix,_iy) at the world's
+        // 16 px tiling, so it covers the four cells whose centres are (_ix +/- 8, _iy +/- 8); a
+        // solid blocks the build when the 16 px cell it stands in is one of those four.
+        // `floor(v / 16)` is the cell index of any point, which is how a solid's own position
+        // is reduced to its cell - no radius, no overlap, and each solid counted at most once
+        // because only its own cell is asked. (The offsets were +/-12 while the wrong 24 px
+        // grid was in force; +/-8 is the same "half a cell" on the grid the world actually has.)
         //
         // The player is excluded from this test on purpose. The spot is asked for *next to*
         // the requester, and the requester's own body is the nearest living thing to it, so
@@ -1608,7 +1684,7 @@ switch (_cmd) {
         var _oq_solid = 0;
         for (var _oq_dx = -1; _oq_dx <= 1; _oq_dx += 2) {
             for (var _oq_dy = -1; _oq_dy <= 1; _oq_dy += 2) {
-                if (CoopSolidInCell(_ix + _oq_dx * 12, _iy + _oq_dy * 12) > 0) _oq_solid += 1;
+                if (CoopSolidInCell(_ix + _oq_dx * 8, _iy + _oq_dy * 8) > 0) _oq_solid += 1;
             }
         }
         if (_oq_solid > 0) {

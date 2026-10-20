@@ -101,11 +101,13 @@ if (global.coopTick mod 300 == 0) {
 //     places itself 96 px to the left of the host's player, and if the two disagree, the
 //     puppet is being drawn where the peer is not.
 if (global.coopPeer.seen && instance_exists(objPlayer)) {
+    CoopResolveBodySprite();   // so `bodySpr` in the line below is the resolved value
     var _ps = global.coopPeer.sprite;
     if (_ps <= 0) _ps = objPlayer.sprite_index;
     var _pk = string(global.coopPeer.x) + "," + string(global.coopPeer.y)
               + " peerSpr " + string(global.coopPeer.sprite)
               + " drawSpr " + string(_ps)
+              + " bodySpr " + string(global.coopBodySprite)
               + " room " + string(global.coopPeer.room)
               + " | me " + string(floor(objPlayer.x)) + "," + string(floor(objPlayer.y))
               + " spr " + string(objPlayer.sprite_index)

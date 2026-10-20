@@ -278,11 +278,19 @@ CoopSend(_b);
 // scheme: `sprBeetIdle`, `sprBeetWalk` - spr<Name><State>. The player's own pair is
 // `sprPlayerIdle` / `sprPlayerWalk`.
 //
-// `asset_get_index` is the honest way to get the index: it returns -1 for a name that is not
-// in the build, so a wrong name fails visibly instead of drawing the wrong thing.
+// The asset's **file** name is `sprPlayerIdle` - it is one of the 1389 `spr*` names in
+// data.win's string table - but `asset_get_index` takes the **display** name, which in
+// GameMaker is the file name without the `spr` prefix. Asking for "sprPlayerIdle" therefore
+// returns -1 and the puppet is silently not drawn at all, which is exactly what the owner
+// saw ("the mock did not spawn"). The candidates are tried in turn, and which one resolved
+// is reported over the wire, so the log says which name is the right one instead of this
+// being a guess that quietly draws nothing.
 if (global.coopBodySprite < 0) {
-    global.coopBodySprite = asset_get_index("sprPlayerIdle");
-    if (global.coopBodySprite < 0) global.coopBodySprite = asset_get_index("sprPlayerWalk");
+    global.coopBodySprite = asset_get_index("PlayerIdle");
+    if (global.coopBodySprite < 0) global.coopBodySprite = asset_get_index("Player Idle");
+    if (global.coopBodySprite < 0) global.coopBodySprite = asset_get_index("sprPlayerIdle");
+    if (global.coopBodySprite < 0) global.coopBodySprite = asset_get_index("PlayerWalk");
+    if (global.coopBodySprite < 0) global.coopBodySprite = asset_get_index("Player Walk");
 }
 
 #define CoopStandSpot(_x, _y)

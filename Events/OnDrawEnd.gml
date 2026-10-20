@@ -51,12 +51,15 @@ if (objPlayer.room != global.coopPeer.room) exit;
 // `sprite_index` 0 in this build. When the peer cannot supply one (the mock peer has no
 // assets and sends -1), the host's own body sprite stands in: it is the same game, so it is
 // the same body.
+//
+// **The name is drawn even when there is no sprite.** A peer that cannot be drawn is exactly
+// the situation where the owner needs to see that the peer is there at all, so the label
+// does not depend on the body being drawable.
 var _spr = global.coopPeer.sprite;
 if (_spr <= 0) {
     CoopResolveBodySprite();
     _spr = global.coopBodySprite;
 }
-if (_spr <= 0) exit;
 
 // Where the peer is drawn. **The host decides.** A peer with no physics - the mock - reports
 // a position that can be inside a tree or in the water, and the owner saw exactly that. The
@@ -71,7 +74,27 @@ var _y = global.coopStandY;
 var _face = global.coopPeer.facing;
 if (_face == 0) _face = 1;
 
-draw_sprite_ext(_spr, 0, _x, _y - 30, _face, 1, 0, c_white, 0.85);
+// Where the sprite is drawn so that its **feet land on the peer's position**. A sprite's
+// origin is not its top-left corner and not necessarily its bottom either, and
+// `sprite_get_yoffset` says how far down the origin sits inside the image - so the image's
+// bottom edge is `drawn_y - yoffset + height`, and putting that on the peer's y gives
+// `drawn_y = peer_y - height + yoffset`. The old fixed offset of -30 was a guess that put the
+// puppet in the air or underground depending on the sprite.
+//
+// The defaults are for the case where there is no sprite at all: a name on its own still has
+// to land somewhere sensible.
+var _h  = 24;
+var _yo = 24;
+if (_spr > 0) {
+    _h  = sprite_get_height(_spr);
+    _yo = sprite_get_yoffset(_spr);
+}
+var _yd = _y - _h + _yo;
+var _top = _yd - _yo;      // the sprite's top edge, in world coordinates
+
+if (_spr > 0) {
+    draw_sprite_ext(_spr, 0, _x, _yd, _face, 1, 0, c_white, 0.85);
+}
 
 // The name, centred over the puppet.
 //
@@ -108,9 +131,8 @@ draw_sprite_ext(_spr, 0, _x, _y - 30, _face, 1, 0, c_white, 0.85);
 var _name = global.coopPeerName;
 if (_name == "") _name = "peer";
 
-var _yd  = _y - 30;                              // where the sprite is drawn
-var _top = _yd - sprite_get_yoffset(_spr);       // the sprite's top edge
-
+// The name sits just above the sprite's head. `_top` is already the sprite's top edge, and
+// the text is 60% of the default font, so a fixed gap of a few pixels is enough.
 draw_set_halign(fa_center);
 draw_text_ext_transformed_color(_x, _top - 11, _name, 12, 200, 0.6, 0.6, 0,
                                 c_white, c_white, c_white, c_white, 1);

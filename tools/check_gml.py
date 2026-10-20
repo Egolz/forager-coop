@@ -77,6 +77,26 @@ LOADER_BLOCKED = {
     "ini_key_delete", "ini_section_delete",
 }
 
+# Arity of the engine builtins this mod calls, as **this build's loader** reports them.
+#
+# The loader's own message is exact and cheap to read - "`sprite_get_yoffset` takes 1 argument,
+# got 2" - but finding that out costs a round trip through the game (compile, launch, read the
+# console, fix, repeat), and that is exactly the loop the wire-layout check below was written
+# to break. So the arities learned from the loader are recorded here and checked locally.
+#
+# Live evidence:
+#   2026-10-21  `sprite_get_yoffset` takes 1 argument - the subimage variant of the sprite
+#               getters is not in this build, unlike in the GameMaker manual.
+BUILTIN_ARITIES = {
+    "sprite_get_yoffset": 1,
+    "sprite_get_height": 1,
+    "sprite_get_width": 1,
+    "string_width": 1,
+    "string_height": 1,
+    "draw_text_ext": 8,
+    "draw_sprite_ext": 9,
+}
+
 NAMES = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 DEFINE = re.compile(r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)"
                     r"(?:\s*\(([^)]*)\))?", re.M)
@@ -289,6 +309,14 @@ def check_calls(name: str, line: int, body: str, where: str, arities: dict[str, 
                                 f"defined with {want}")
             continue
         if fn in arities:
+            continue
+        if fn in BUILTIN_ARITIES and m.end() <= len(body):
+            want = BUILTIN_ARITIES[fn]
+            got = count_args(body, m.end() - 1)
+            if got is not None and got != want:
+                problems.append(f"{where}:{ln}: {fn}() called with {got} arguments, but this "
+                                f"build's loader takes {want} - COMPILE fails with "
+                                f"\"`{fn}` takes {want} argument(s), got {got}\"")
             continue
         if fn[0].isupper():
             continue                    # ObjFoo.bar() style, not a builtin

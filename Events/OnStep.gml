@@ -111,8 +111,10 @@ if (global.coopPeer.seen && instance_exists(objPlayer)) {
               + " spr " + string(objPlayer.sprite_index)
               + " img " + string(objPlayer.image_index);
     if (_ps > 0) {
-        _pk = _pk + " h " + string(sprite_get_height(_ps, 0))
-                  + " yo " + string(sprite_get_yoffset(_ps, 0));
+        // One argument, not two: this build's sprite_get_height/sprite_get_yoffset take only
+        // the sprite (see the note in OnDrawEnd.gml).
+        _pk = _pk + " h " + string(sprite_get_height(_ps))
+                  + " yo " + string(sprite_get_yoffset(_ps));
     }
     if (_pk != global.coopPeerKey) {
         global.coopPeerKey = _pk;

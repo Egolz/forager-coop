@@ -70,6 +70,10 @@ draw_sprite_ext(_spr, 0, _x, _y - 30, _face, 1, 0, c_white, 0.85);
 // of a sprite, which is why the name first landed *inside* the puppet instead of above its
 // head.
 //
+// **One argument, not two.** This build's `sprite_get_yoffset` takes only the sprite - the
+// subimage variant is not in it, and the mod loader's error says so exactly:
+// `sprite_get_yoffset` takes 1 argument, got 2. The same goes for `sprite_get_height`.
+//
 // `draw_text_ext` takes the alignment and the scale as arguments, so this needs no draw state
 // at all - which matters, because the game's own HUD text is drawn in the same frame and
 // would otherwise inherit whatever this left behind. The horizontal centring is done by hand
@@ -80,7 +84,7 @@ var _name = global.coopPeerName;
 if (_name == "") _name = "peer";
 
 var _yd  = _y - 30;                              // where the sprite is drawn
-var _top = _yd - sprite_get_yoffset(_spr, 0);    // the sprite's top edge
+var _top = _yd - sprite_get_yoffset(_spr);       // the sprite's top edge
 
 var _scale = 0.6;
 var _nw = string_width(_name) * _scale;

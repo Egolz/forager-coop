@@ -121,6 +121,10 @@ tools/mock_e2e.ps1          offline end-to-end test of that peer: mock server <-
                             welcome, pong, structure table, INTENT_PLACE).
                             No game needed - this is what caught the two bugs in
                             the mock itself.
+tools/steamlink/            a Steam relay, so two players need no IP address and
+                            no port forwarding. The mod does not change: the game
+                            keeps talking TCP to 127.0.0.1 and the relay carries
+                            those bytes over Steam. See its own README.
 docs/PROTOCOL.md            packet format + GameMaker's socket handshake
 ```
 

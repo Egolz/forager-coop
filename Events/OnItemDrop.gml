@@ -24,14 +24,24 @@ if (array_length(d) <= 0) return;
 
 // Live question left open by the first real harvest (2026-10-20, tree at 664,680):
 // the peer saw **two** byte-identical DROPs - same x, same y, same item, same
-// stack. That is either (a) one call carrying a two-entry array of two ground
-// items, or (b) the game calling this event once per dropped instance with a
-// one-entry array each time. The difference matters on the receiving side: (a) is
-// two piles that really exist and must both be mirrored, (b) is one pile reported
-// twice and must be deduped. The wire cannot tell them apart from the packets, so
-// the length is reported alongside each drop from now on.
-Trace("Co-op: OnItemDrop fired, " + string(array_length(d)) + " entr"
-      + (array_length(d) == 1 ? "y" : "ies") + ".");
+// stack. The second harvest (0.0.14-m2l, tree at 680,680) showed a *third* drop at
+// the same tile with a different item id, so the shapes on the table are now: one
+// call with a multi-entry array, or the event firing once per instance.
+//
+// Trace() is no help here: it goes to the on-screen console, and a mod cannot write
+// files, so nothing it prints survives a run. DEBUG_LINE is the channel that reaches
+// the mock (which writes %TEMP%\coop_debug.txt), so the count goes out that way -
+// read-only, and only when someone is listening.
+if (global.coopPeerAlive) {
+    var _od_seen = "";
+    for (var _od_d = 0; _od_d < array_length(d); _od_d++) {
+        var _od_e = array_get(d, _od_d);
+        _od_seen += (string(_od_d) + ":item" + string(_od_e.item)
+                     + "x" + string(_od_e.stack) + " ");
+    }
+    CoopSendDebugLine("OnItemDrop fired, " + string(array_length(d)) + " entries: "
+                      + _od_seen);
+}
 
 for (var _od_i = 0; _od_i < array_length(d); _od_i++) {
     var _od = array_get(d, _od_i);

@@ -237,6 +237,13 @@ return global.coopItemNames[_id];
 #define CoopFindItem(_name)
 // -> id of the item called _name, or -1. The mirror of CoopFindStructure, and for
 //    the same reason: a name is what a human reads in a log, an id is what travels.
+//
+// Live lesson (F3 probe, 2026-10-20): the names are **localized**, exactly like the
+// structure names. `CoopFindItem("Wood")` returned -1 on the owner's install while
+// `ItemGet(Item.Wood, ItemData.Name)` returned "Древесина". So this lookup is a
+// convenience for a hand-typed console query, never the wire's key: the wire carries
+// the item **id**, and `Item.Wood == 0`, `Item.Stone == 1`, `Item.Coin == 111` are
+// constants the build itself defines.
 if (array_length(global.coopItemNames) == 0) CoopBuildItemDb();
 var _fi_want = string_lower(_name);
 var _fi_n    = array_length(global.coopItemNames);
@@ -248,6 +255,12 @@ return -1;
 #define CoopSendItemTable()
 // Our item database, as id/name pairs, so a divergence between two installs is
 // visible before it turns into a wrong item on someone's island.
+//
+// The **names travel for the log only**. Live F3 (2026-10-20) showed why: they are
+// localized, so two installs on different languages disagree on every single name
+// while their item **ids** are identical. The check the receiver actually runs is
+// therefore count + the anchor ids, which are language-independent - the names are
+// there so a divergence report can say *which* item moved.
 if (array_length(global.coopItemNames) == 0) CoopBuildItemDb();
 var _it_b = buffer_create(512, buffer_grow, 1);
 buffer_write(_it_b, buffer_u8, CoopCmd.ITEM_TABLE);
@@ -283,6 +296,12 @@ array_push(_pi_lines, "Item.Count = " + string(_pi_count)
 //    installs, a drop of "Wood" means the same thing on either machine. Wood and
 //    Stone are the two the docs' enum example uses; Coin is the one PencilPal
 //    spends and counts.
+//
+//    Note what "found-by-name" is for: the names in this database are **localized**
+//    (live 2026-10-20: Item.Wood reads back as "Древесина" on the owner's install),
+//    so a by-name search in English returns -1 and always will. That is not a bug in
+//    the lookup, it is the reason the wire carries ids. The line prints it so the
+//    asymmetry is on the record rather than discovered later.
 var _pi_anchors = [["Wood", Item.Wood], ["Stone", Item.Stone], ["Coin", Item.Coin]];
 for (var _pi_ai = 0; _pi_ai < array_length(_pi_anchors); _pi_ai++) {
     var _pi_an = array_get(array_get(_pi_anchors, _pi_ai), 0);
@@ -290,6 +309,7 @@ for (var _pi_ai = 0; _pi_ai < array_length(_pi_anchors); _pi_ai++) {
     array_push(_pi_lines, "anchor " + _pi_an + " = " + string(_pi_av)
                + "  name '" + CoopItemName(_pi_av) + "'"
                + "  found-by-name " + string(CoopFindItem(_pi_an))
+               + "  (a -1 is expected while the install is not English)"
                + "  owned " + string(ItemCount(_pi_av, false)));
 }
 
@@ -1129,22 +1149,47 @@ switch (_cmd) {
         break;
 
     case CoopCmd.ITEM_TABLE:
-        // Same divergence check as the structure table, for M2.2. Every loot
-        // packet carries an item id, so a shifted database would turn "wood"
-        // into "stone" silently; this makes it loud instead.
+        // Same divergence check as the structure table, for M2.2 - with one
+        // difference the F3 probe forced (2026-10-20): item **names are localized**
+        // ("Древесина", not "wood"), so counting name matches would scream on two
+        // installs that merely run different languages while their ids are fine.
+        // The verdict is therefore count + the anchor ids; the names are read only
+        // to report which rows moved when something really is wrong.
         if (array_length(global.coopItemNames) == 0) CoopBuildItemDb();
         var _itn     = buffer_read(_buf, buffer_u16);
-        var _itmatch = 0;
+        var _itnames = [];
         for (var _iti = 0; _iti < _itn; _iti++) {
             var _itid   = buffer_read(_buf, buffer_u16);
             var _itname = buffer_read(_buf, buffer_string);
-            if (_itid < array_length(global.coopItemNames)
-                && global.coopItemNames[_itid] == _itname) _itmatch += 1;
+            _itnames[_itid] = _itname;
         }
-        Trace("Co-op: host item table: " + string(_itmatch) + "/" + string(_itn)
-              + " names match ours.");
-        if (_itmatch < _itn) {
-            Trace("Co-op: WARNING - our item databases differ; loot would arrive as the wrong item.");
+        var _itlocal = global.coopItemCount;
+        Trace("Co-op: host item table: " + string(_itn) + " entries, we have "
+              + string(_itlocal) + ".");
+        if (_itn != _itlocal) {
+            Trace("Co-op: WARNING - item databases differ in size; the two installs "
+                  + "are not the same build, and loot ids will not line up.");
+            break;
+        }
+        // The anchors are constants of the build, so they must agree whatever the
+        // language. If one moved, ids shifted and loot would arrive as a wrong item.
+        var _it_anchors = ["Wood", "Stone", "Coin"];
+        var _it_aids    = [Item.Wood, Item.Stone, Item.Coin];
+        var _it_bad     = 0;
+        for (var _itai = 0; _itai < array_length(_it_aids); _itai++) {
+            var _itavo = array_get(_it_aids, _itai);
+            if (array_get(_itnames, _itavo) == global.coopItemNames[_itavo]) continue;
+            _it_bad += 1;
+            Trace("Co-op: WARNING - anchor #" + string(_itavo) + " ("
+                  + array_get(_it_anchors, _itai) + ") is '"
+                  + global.coopItemNames[_itavo] + "' here and '"
+                  + array_get(_itnames, _itavo) + "' there.");
+        }
+        if (_it_bad > 0) {
+            Trace("Co-op: WARNING - item ids shifted between the installs; loot would "
+                  + "arrive as the wrong item.");
+        } else {
+            Trace("Co-op: item ids agree on all anchors.");
         }
         break;
 

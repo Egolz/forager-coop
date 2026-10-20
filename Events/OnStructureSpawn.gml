@@ -33,7 +33,8 @@ CoopSendDebugLine("probe spawn: obj#" + string(i.object_index)
                   + " mod16 " + string(i.x mod 16) + "," + string(i.y mod 16)
                   + " mod24 " + string(i.x mod 24) + "," + string(i.y mod 24)
                   + " sprite " + string(i.sprite_index)
-                  + " depth " + string(i.depth));
+                  + " depth " + string(i.depth)
+                  + " objStruct " + string(struc));
 
 if (global.coopIsHost) {
     // i.depth is not the game's depth yet - OnStructureSpawn() runs before the

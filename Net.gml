@@ -124,6 +124,22 @@ global.coopPeer.seen      = false;  // the peer is gone with the session
 // ---------------------------------------------------------------------------
 // **The session is closed here, and that is the point of this change (2026-10-20 ~23:20).**
 //
+// CORRECTED by a live run later the same day: closing the socket **here** is **not** sufficient,
+// and the theory this paragraph was built on is wrong in its timing. The controlled pair of
+// runs was:
+//
+//     press F7 first (our own CoopDisconnect) -> the game returns to the menu, no crash
+//     leave the socket open                   -> the game dies ~1 s after OnRoomLoad
+//
+// So the fault is the socket being **live while the world tears down** - but this event fires on
+// the way *out*, after the world is already gone, and a socket closed during that window still
+// meets the fault. The fix that actually works is in `OnStep`, which ends the session at the
+// save-and-exit transition (`objTransition.target == rmInputSelect`), before the world unloads.
+//
+// What this handler is now is a **safety net**: it still ends the session for the cases the
+// transition was not seen (a crash, a forced quit), and its close is a no-op once `OnStep` has
+// already ended the session. The original reasoning below is kept as the record of the attempt.
+//
 // The room-load diagnostic settled where the fault is *not*: on "save and quit" this handler
 // runs, completes, and reports `OUT survived tick=...` to the peer - and only then does the
 // process die (`0xc0000005` at `0x012c265f`). The last frame mod sent anything is tick 5985,

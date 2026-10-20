@@ -14,6 +14,32 @@ if (keyboard_check_pressed(vk_f12)) CoopProbeSpot();
 if (keyboard_check_pressed(vk_f3)) CoopProbeItems();
 if (keyboard_check_pressed(vk_f4)) CoopProbeGrid();
 
+// ---------------------------------------------------------------------------
+// **Save & quit: end the session here, before the world unloads.**
+//
+// This is the fix for the native crash (`0xc0000005` at `0x012c265f`) that killed the game on
+// every "save and quit" while a peer was connected. The evidence is a controlled pair of live
+// runs on 2026-10-20:
+//
+//     press F7 first (our own CoopDisconnect) -> the game returns to the menu, no crash
+//     leave the socket open                   -> the game dies ~1 s after OnRoomLoad
+//
+// So the fault is caused by the socket being **live while the world tears down**, not by the
+// world teardown itself. `OnRoomLoad` already closed the socket, and did not help, because that
+// event fires on the way *out* - the world is already gone by then, and the close lands inside
+// the window that faults. The engine's own netcode closes its sockets at the transition instead
+// (the reference mod's OnStep: `instance_exists(objTransition) && objTransition.target ==
+// rmInputSelect`, then `network_destroy`), which is the one place that is early enough.
+//
+// This copies that: as soon as the transition to the menu begins, end the session. The guard is
+// the same pair `CoopLeaveWorld` uses, and it is naturally one-shot - the first call clears both
+// flags, so the repeated frames of the transition do nothing. If the transition is reached while
+// not connected the guard is false and nothing happens, which is why the initial menu entry is
+// safe.
+if (instance_exists(objTransition) && objTransition.target == rmInputSelect) {
+    if (global.coopConnected || global.coopIsHost) CoopDisconnect("save and quit");
+}
+
 if (!global.coopPeerAlive) exit;
 
 // **"Am I in a world?" is asked here, not remembered from a room event.** A flag set by

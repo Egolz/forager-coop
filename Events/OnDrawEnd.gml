@@ -61,16 +61,29 @@ if (_face == 0) _face = 1;
 
 draw_sprite_ext(_spr, 0, _x, _y - 30, _face, 1, 0, c_white, 0.85);
 
-// The name, centred over the puppet. `string_width` measures it so the text can be centred
-// **without** changing halign: with left alignment, starting at x minus half the width puts the
-// middle of the string on x. Both alignments are set to the GameMaker defaults first, because
-// the game's own HUD text is drawn in the same frame and would otherwise inherit whatever the
-// game's last draw left behind - and this file cannot read the previous value back, so the
-// defaults are the only honest thing to leave.
+// The name, centred over the puppet and small enough to read as a label rather than as a
+// signpost.
+//
+// The position is **computed, not guessed**. A sprite's origin is not its top-left corner:
+// `sprite_get_yoffset` says how far down the origin sits inside the image, so when the sprite
+// is drawn at (x, y) its top edge is at `y - yoffset`. A fixed pixel offset was wrong by most
+// of a sprite, which is why the name first landed *inside* the puppet instead of above its
+// head.
+//
+// `draw_text_ext` takes the alignment and the scale as arguments, so this needs no draw state
+// at all - which matters, because the game's own HUD text is drawn in the same frame and
+// would otherwise inherit whatever this left behind. The horizontal centring is done by hand
+// (`string_width` is the unscaled width, so it is scaled by hand too) because the alignment
+// argument of `draw_text_ext` is horizontal only, and `fa_center` is a constant this build
+// does not export.
 var _name = global.coopPeerName;
 if (_name == "") _name = "peer";
 
-var _nw = string_width(_name);
-draw_set_halign(fa_left);
-draw_set_valign(fa_top);
-draw_text(_x - _nw / 2, _y - 46, _name);
+var _yd  = _y - 30;                              // where the sprite is drawn
+var _top = _yd - sprite_get_yoffset(_spr, 0);    // the sprite's top edge
+
+var _scale = 0.6;
+var _nw = string_width(_name) * _scale;
+var _nh = string_height(_name) * _scale;
+
+draw_text_ext(_x - _nw / 2, _top - _nh - 3, _name, c_white, 1, fa_left, _scale, _scale);

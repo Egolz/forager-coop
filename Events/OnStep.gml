@@ -85,6 +85,41 @@ if (global.coopTick mod 300 == 0) {
                       + " player " + string(instance_exists(objPlayer)));
 }
 
+// Diagnostic (M3.1). The owner reported the peer's puppet appearing **only while the player
+// moves**, and the name landing inside the puppet rather than above its head. Both are
+// questions about numbers, so this reports the numbers, on change, so the log shows the track
+// the puppet follows instead of a snapshot of it.
+//
+// What it reports and why each number is here:
+//   * where the peer is, and in which room - a puppet that is drawn in the wrong room, or at
+//     a position that is not where the peer said it was, is a **sync** bug, not a draw bug;
+//   * the sprite the peer sent (`-1` for the mock peer, which has no assets) and the sprite the
+//     host would actually draw for it - the fallback is `objPlayer.sprite_index`, and that is
+//     worth seeing, because a sprite index of 0 would make the puppet disappear entirely;
+//   * that sprite's height and origin offset - the two numbers that say where its head is;
+//   * the host's own player position and sprite, so the two can be compared: the mock peer
+//     places itself 96 px to the left of the host's player, and if the two disagree, the
+//     puppet is being drawn where the peer is not.
+if (global.coopPeer.seen && instance_exists(objPlayer)) {
+    var _ps = global.coopPeer.sprite;
+    if (_ps <= 0) _ps = objPlayer.sprite_index;
+    var _pk = string(global.coopPeer.x) + "," + string(global.coopPeer.y)
+              + " peerSpr " + string(global.coopPeer.sprite)
+              + " drawSpr " + string(_ps)
+              + " room " + string(global.coopPeer.room)
+              + " | me " + string(floor(objPlayer.x)) + "," + string(floor(objPlayer.y))
+              + " spr " + string(objPlayer.sprite_index)
+              + " img " + string(objPlayer.image_index);
+    if (_ps > 0) {
+        _pk = _pk + " h " + string(sprite_get_height(_ps, 0))
+                  + " yo " + string(sprite_get_yoffset(_ps, 0));
+    }
+    if (_pk != global.coopPeerKey) {
+        global.coopPeerKey = _pk;
+        CoopSendDebugLine("probe peer " + _pk);
+    }
+}
+
 // Packet corpus: the whole recent operation ring goes out whenever a new token was added.
 // This is the flight recorder the phase marker is not - see the diagnostics block in
 // Net.gml. It rides the once-per-frame OnStep rather than being sent where the token was

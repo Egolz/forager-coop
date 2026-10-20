@@ -39,7 +39,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.34-m3a";
+global.coopVersion  = "0.0.35-m3b";
 global.coopProtocol = 5;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -103,6 +103,8 @@ global.coopPeerVersion = "";
 // it arrives before the first puppet is ever drawn.
 global.coopName     = "player";  // what we call ourselves; see CoopLocalName below
 global.coopPeerName = "";        // what the peer called themselves ("peer" until known)
+// Diagnostic (M3.1): the last "probe peer" line, so the diagnostic only reports on change.
+global.coopPeerKey  = "";
 
 // Temporary: how many resource-spawn probe lines have gone out (see
 // Events/OnResourceSpawn.gml). Reset each session; the probe is removed when M2.2's

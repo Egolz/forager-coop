@@ -31,6 +31,21 @@ if (global.coopSocket >= 0) {
 
 #define CoopResetPeer()
 // Drops the peer, keeping the listening server (host) if there is one.
+//
+// **It destroys the peer socket before forgetting it**, and that line is the fix for a hard
+// crash, not tidiness. The socket used to be dropped by writing -1 over it, which leaks the
+// handle: `network_destroy` was called for `coopServer` alone and never for `coopSocket`, so
+// a session left a live socket behind. Leaving the world with a mock peer connected took the
+// whole game down with a native access violation
+// (Application Error, `Forager.exe`, exception `0xc0000005`, faulting offset
+// `0x012c265f`) instead of returning to the main menu - reproducible only while connected,
+// and invisible to error.log, because a native fault never reaches the GML error handler.
+// That is the shape of a socket whose owner is gone.
+//
+// The guard matters: the host receives its peer socket through the async connect event
+// (`OnNetworkAsync`), a client makes its own with `network_create_socket`, and both end up
+// in this one global - so this is the single place that knows to close whichever it is.
+if (global.coopSocket >= 0) network_destroy(global.coopSocket);
 global.coopConnected   = false;
 global.coopPeerAlive   = false;
 global.coopPeer.seen   = false;
@@ -40,6 +55,38 @@ global.coopPingMs      = -1;
 global.coopSocket      = -1;
 global.coopPending        = [];
 global.coopApplyingRemote = false;
+
+// ---------------------------------------------------------------------------
+// World lifetime.
+//
+// There is deliberately **no "enter the world" function**. One existed (CoopEnterWorld),
+// guarded by a `coopWorldLoaded` flag set from OnRoomLoad, and the live probe of 2026-10-20
+// showed the event only ever arrives on the way *out* (`entering=0 player=0`, and twice), so
+// the flag was never raised and the per-frame half of the mod bailed out at its gate for a
+// whole session while looking healthy. What replaced it is a plain `instance_exists(objPlayer)`
+// at each point that needs a world - see OnStep/OnDrawEnd/OnResourceSpawn. Nothing is
+// remembered, so nothing can disagree with reality.
+//
+// What `CoopLeaveWorld` deliberately does NOT do is end the session. Dropping the socket here
+// would also break the transport test where the mock acts as the *server* (F6 on a client
+// dials out, with no host), and a session is a transport fact, not a world fact. What it does
+// is stop *describing* the dead world, which is the part that was crashing.
+// ---------------------------------------------------------------------------
+
+#define CoopLeaveWorld()
+// The world is unloading. Forget everything that points into it.
+//
+// `coopApplyingRemote`/`coopApplyingLoot` are cleared too: they are set only for the instant
+// of an apply, so a session cannot legitimately be left holding them, and a stale flag would
+// silently disable the loot path when the next world loads.
+global.coopBushObjAt      = [];   // the snapshot is the crash: it holds instance handles
+global.coopBushIds        = [];   // for a world that is being destroyed
+global.coopBushXs         = [];
+global.coopBushYs         = [];
+global.coopBushObj        = -2;
+global.coopApplyingRemote = false;
+global.coopApplyingLoot   = false;
+global.coopPeer.seen      = false;  // the peer is still connected; we just cannot see them
 
 #define CoopHost()
 if (global.coopIsHost) { Trace("Co-op: already hosting."); exit; }
@@ -86,6 +133,8 @@ if (global.coopServer >= 0) network_destroy(global.coopServer);
 global.coopServer = -1;
 global.coopIsHost = false;
 global.coopTick   = 0;
+// The peer socket is closed inside CoopResetPeer, which owns that job - closing it here as
+// well would mean destroying one handle twice.
 CoopResetPeer();
 Trace("Co-op: disconnected (" + _why + ").");
 
@@ -135,7 +184,12 @@ buffer_write(_b, buffer_s32, floor(objPlayer.y));
 buffer_write(_b, buffer_u16, floor(objPlayer.angle));
 buffer_write(_b, buffer_s8, floor(objPlayer.facing));
 buffer_write(_b, buffer_s32, objPlayer.sprite_index);
-buffer_write(_b, buffer_u8, floor(objPlayer.image_index) mod 256);
+// `mod` in GML keeps the sign of the dividend, so a negative image_index would write a
+// negative value into a **u8** field - a byte write outside the field's range, in a buffer
+// that is then handed to the network layer. Normalising to 0..255 first is one `abs` and
+// removes the whole class of risk, at the cost of nothing (the receiver only uses this as an
+// animation frame hint).
+buffer_write(_b, buffer_u8, abs(floor(objPlayer.image_index)) mod 256);
 buffer_write(_b, buffer_u8, objPlayer.room);
 CoopSend(_b);
 
@@ -312,11 +366,22 @@ return _da_res;
 // unknown and only a radius around the picker is.
 return CoopDropAt(_x, _y, _item, _radius);
 
+#define CoopWorldRoom()
+// -> the room our player is in, or -1 when there is no world (menus, or a room being torn
+//    down). Every packet that carries a room number reads it through here rather than
+//    touching `objPlayer.room` directly: a destroyed instance is a **native** crash
+//    (`0xc0000005`), not a catchable GML error, and these senders are reached from events
+//    that the game can deliver while it is unloading the world.
+if (!instance_exists(objPlayer)) return -1;
+return objPlayer.room;
+
 #define CoopSendDrop(_x, _y, _item, _stack)
 // Announce an item that appeared in the world.
+var _dr_room = CoopWorldRoom();
+if (_dr_room < 0) exit;
 var _dr_b = buffer_create(32, buffer_grow, 1);
 buffer_write(_dr_b, buffer_u8, CoopCmd.DROP);
-buffer_write(_dr_b, buffer_u8, objPlayer.room);
+buffer_write(_dr_b, buffer_u8, _dr_room);
 buffer_write(_dr_b, buffer_s32, floor(_x));
 buffer_write(_dr_b, buffer_s32, floor(_y));
 buffer_write(_dr_b, buffer_u16, _item);
@@ -325,9 +390,11 @@ CoopSend(_dr_b);
 
 #define CoopSendPickup(_x, _y, _item)
 // Announce that an item left the world because someone took it.
+var _pu_room = CoopWorldRoom();
+if (_pu_room < 0) exit;
 var _pu_b = buffer_create(32, buffer_grow, 1);
 buffer_write(_pu_b, buffer_u8, CoopCmd.PICKUP);
-buffer_write(_pu_b, buffer_u8, objPlayer.room);
+buffer_write(_pu_b, buffer_u8, _pu_room);
 buffer_write(_pu_b, buffer_s32, floor(_x));
 buffer_write(_pu_b, buffer_s32, floor(_y));
 buffer_write(_pu_b, buffer_u16, _item);
@@ -336,9 +403,17 @@ CoopSend(_pu_b);
 #define CoopSendResourceDestroy(_x, _y, _obj)
 // Announce that a resource (tree, rock, bush, ...) was harvested and is gone.
 // The object index travels, not a name: names are localized, object indices are not.
+//
+// The room comes from CoopWorldRoom(), which is the guarded lookup: this runs from
+// OnResourceDestroy, from the plant walk in OnStep and from OnStructureDestroy, and the
+// first of those can be delivered while the room is being torn down. Asking a destroyed
+// objPlayer for `.room` is a native crash rather than a GML error, so the packet is simply
+// not sent when there is no world to name.
+var _rd_room = CoopWorldRoom();
+if (_rd_room < 0) exit;
 var _rd_b = buffer_create(32, buffer_grow, 1);
 buffer_write(_rd_b, buffer_u8, CoopCmd.RESOURCE_DESTROY);
-buffer_write(_rd_b, buffer_u8, objPlayer.room);
+buffer_write(_rd_b, buffer_u8, _rd_room);
 buffer_write(_rd_b, buffer_s32, floor(_x));
 buffer_write(_rd_b, buffer_s32, floor(_y));
 buffer_write(_rd_b, buffer_u16, _obj);
@@ -380,6 +455,12 @@ return 1;
 #define CoopApplyResourceDestroy(_x, _y, _obj)
 // Destroy a harvested resource at the given tile. Object index rather than name, so
 // a localized build still matches. Walks true instances for the same reason drops do.
+//
+// **This also removes a demolished structure** (see OnStructureDestroy). It is named for
+// resources because that is what it was written for, but the operation it performs - "the
+// instance of this object index at this tile is gone" - is the same one a demolished furnace
+// needs, and a structure is identified by an object index just as a rock is (the structure
+// database holds each row's object). So there is one removal path on the wire, not two.
 var _ar_hits = 0;
 var _ar_n    = TrueInstanceNumber(_obj);
 for (var _ar_i = 0; _ar_i < _ar_n; _ar_i++) {
@@ -610,7 +691,7 @@ array_push(global.coopPending, [_ip_iid, floor(_x), floor(_y), _ip_sid, CoopStru
 var _ip_b = buffer_create(96, buffer_grow, 1);
 buffer_write(_ip_b, buffer_u8, CoopCmd.INTENT_PLACE);
 buffer_write(_ip_b, buffer_u32, _ip_iid);
-buffer_write(_ip_b, buffer_u8, objPlayer.room);
+buffer_write(_ip_b, buffer_u8, CoopWorldRoom());
 buffer_write(_ip_b, buffer_s32, floor(_x));
 buffer_write(_ip_b, buffer_s32, floor(_y));
 buffer_write(_ip_b, buffer_string, _name);
@@ -624,7 +705,7 @@ var _mp_b = buffer_create(128, buffer_grow, 1);
 buffer_write(_mp_b, buffer_u8, CoopCmd.MUTATION_PLACE);
 buffer_write(_mp_b, buffer_u32, global.coopSeq);
 buffer_write(_mp_b, buffer_u32, _intentId);
-buffer_write(_mp_b, buffer_u8, objPlayer.room);
+buffer_write(_mp_b, buffer_u8, CoopWorldRoom());
 buffer_write(_mp_b, buffer_s32, floor(_x));
 buffer_write(_mp_b, buffer_s32, floor(_y));
 buffer_write(_mp_b, buffer_s32, floor(_depth));
@@ -1176,15 +1257,57 @@ switch (_cmd) {
                 break;
             }
         }
+
+        // **Snap the request to the world's own grid.** The world is tiled at 24 px: every
+        // coordinate a structure actually occupies in this build is a multiple of 24 (the
+        // furnace in the live probes sat at 672,672 and 688,688; the plants at 600,648 and
+        // 696,648). A client cannot be trusted to send such a point - the mock reports its
+        // puppet's exact position and adds an offset that is a multiple of 16, so its asks
+        // arrive at coordinates like 665,578 and 651,649, which fall *between* cells and put
+        // the structure off-grid. Nothing downstream wants the raw value: the depth is
+        // already a pure function of y, and the wash of "wrong place" reports live
+        // 2026-10-20 all trace back to a structure created at a non-grid point.
+        //
+        // Rounding to the nearest multiple of 24 (`round(_x / 24) * 24`) is the whole fix,
+        // and it is deliberately *not* a search for a nearby free cell: the owner's chosen
+        // behaviour is that a spot which cannot take the structure is **refused**, so the
+        // player is told and can aim again, rather than having their building silently
+        // shift somewhere else.
+        var _sn_x = round(_ix / 24) * 24;
+        var _sn_y = round(_iy / 24) * 24;
+        if (_sn_x != _ix || _sn_y != _iy) {
+            Trace("Co-op: snapped intent #" + string(_iid) + " from "
+                  + string(_ix) + "," + string(_iy) + " to "
+                  + string(_sn_x) + "," + string(_sn_y) + " (the 24 px world grid).");
+        }
+        _ix = _sn_x;
+        _iy = _sn_y;
         // Is the spot buildable at all? Until now a client could ask for anything
         // in range, and the mock's furnace landed on open water - a player could
         // not have built there. WaterCollision(x, y) is the game's own answer and
         // this build lets a mod call it directly (F11, live 2026-10-20:
         // `WaterCollision(716,630) = 0` compiled and ran, so the wrapper path was
         // never needed). Non-zero means water, so the intent is refused.
-        if (WaterCollision(_ix, _iy) != 0) {
-            CoopSendIntentRejected(_iid, "that spot is on water");
-            Trace("Co-op: refused intent #" + string(_iid) + " - water at "
+        //
+        // **The whole footprint has to be asked, not its centre.** A furnace is 2x2 cells
+        // (~48x48 px at the game's 24 px build-cell), so a single call at (_ix,_iy) only
+        // clears the one cell the structure is centred on and lets an edge hang over water -
+        // reported live 2026-10-20 ("can place a furnace with 1-3 tiles of water under it").
+        // The probe on OnStructureSpawn settles where the centre sits inside the footprint;
+        // until that reading lands, ask the **four cell centres of the 2x2 block** around the
+        // requested point, which covers the footprint for any centre convention (corner,
+        // centre of a cell, or centre of the block).
+        var _wq_water = 0;
+        for (var _wq_dx = -1; _wq_dx <= 1; _wq_dx += 2) {
+            for (var _wq_dy = -1; _wq_dy <= 1; _wq_dy += 2) {
+                if (WaterCollision(_ix + _wq_dx * 12, _iy + _wq_dy * 12) != 0) _wq_water += 1;
+            }
+        }
+        if (_wq_water > 0) {
+            CoopSendIntentRejected(_iid, "that spot is on water ("
+                                   + string(_wq_water) + " of 4 tiles)");
+            Trace("Co-op: refused intent #" + string(_iid) + " - water on "
+                  + string(_wq_water) + " of 4 tiles at "
                   + string(_ix) + "," + string(_iy) + ".");
             break;
         }
@@ -1192,9 +1315,22 @@ switch (_cmd) {
         // or an existing structure. WaterCollision answers water; this answers
         // "something is already standing here", measured against parSolid, the one
         // ancestor trees, rocks and buildings share (F12, live 2026-10-20).
-        if (CoopSolidNear(_ix, _iy) > 0) {
-            CoopSendIntentRejected(_iid, "that spot is already occupied");
-            Trace("Co-op: refused intent #" + string(_iid) + " - solid at "
+        //
+        // Checked at the same **four cell centres** as the water test, for the same reason:
+        // a 2x2 structure touches four cells, and only asking the centre would let it be
+        // dropped half onto a tree. The check is a 24 px radius around each cell centre, so
+        // a solid in any of the four cells is caught.
+        var _oq_solid = 0;
+        for (var _oq_dx = -1; _oq_dx <= 1; _oq_dx += 2) {
+            for (var _oq_dy = -1; _oq_dy <= 1; _oq_dy += 2) {
+                if (CoopSolidNear(_ix + _oq_dx * 12, _iy + _oq_dy * 12) > 0) _oq_solid += 1;
+            }
+        }
+        if (_oq_solid > 0) {
+            CoopSendIntentRejected(_iid, "that spot is already occupied ("
+                                   + string(_oq_solid) + " of 4 tiles)");
+            Trace("Co-op: refused intent #" + string(_iid) + " - solid on "
+                  + string(_oq_solid) + " of 4 tiles at "
                   + string(_ix) + "," + string(_iy) + ".");
             break;
         }

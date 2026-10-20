@@ -711,14 +711,24 @@ class Peer:
             else:
                 px, py = self.px, self.py
             if not self.place_spots:
-                # Offsets around the game's player, on a 16 px grid (the build-cell
-                # size) out to 8 cells, walking outward in a spiral. A sparse fixed
-                # ring reaches 320 px and can miss every legal cell when the owner
+                # Offsets around the game's player, on the **24 px world grid** (the
+                # build-cell the host's spot check and the game's own structures use -
+                # every structure coordinate seen live is a multiple of 24, e.g. the
+                # furnace at 672,672 and 688,688). Walking outward in a spiral. A sparse
+                # fixed ring reaches 320 px and can miss every legal cell when the owner
                 # stands on a small island - which is exactly what happened live
                 # 2026-10-20 at 03:41, where all 25 ring spots were water or a tree
                 # and the mock had nowhere legal to ask. A dense spiral stays on the
                 # land the owner is actually standing on. The first entries sit on and
                 # right beside the player, so an occupied cell is hit immediately.
+                #
+                # The base is **snapped to the grid** before the offsets are added, so
+                # every spot this mock asks for is itself on the grid. The earlier
+                # 16 px step (and an unsnapped base) produced asks like 665,578, which
+                # fall between cells - the host now snaps them back, and a test that asks
+                # off-grid would be measuring the snap instead of the spot check.
+                _bx = round(px / 24) * 24
+                _by = round(py / 24) * 24
                 self.place_spots = []
                 for _ring in range(0, 7):
                     for _gx in range(-_ring, _ring + 1):
@@ -727,12 +737,11 @@ class Peer:
                                 continue
                             if _gx == 0 and _gy == 0:
                                 continue   # the player's own cell is not buildable
-                            self.place_spots.append((_gx * 16, _gy * 16))
-            dx, dy = self.place_spots[self.place_try % len(self.place_spots)]
+                            self.place_spots.append((_bx + _gx * 24, _by + _gy * 24))
             if self.place_abs is not None:
                 tx, ty = self.place_abs            # round 2: an exact cell, not an offset
             else:
-                tx, ty = (px + dx, py + dy)
+                tx, ty = self.place_spots[self.place_try % len(self.place_spots)]
             room = self.room if self.room else 8
             self.last_intent = (intent_id := random.randint(1, 0xFFFF))
             self.last_spot = (tx, ty)

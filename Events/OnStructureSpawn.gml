@@ -20,6 +20,22 @@ if (_name == "") {
     return;
 }
 
+// Diagnostic, temporary (build-grid investigation, 2026-10-20). A structure the **game** places
+// is the ground truth for where a structure belongs, and this is the only place that sees one.
+// It reports the raw spawn coordinates, their remainders against the candidate cells (24 px, the
+// build-cell the occupancy check uses, and 12 px) and the centre of the instance's own bounding
+// box. The four numbers together say whether the game snaps to a grid, to which one, and whether
+// `x,y` is the origin or the centre - all of which the far end must reproduce, and none of which
+// can be guessed from a furnace that was already standing.
+CoopSendDebugLine("probe spawn: obj#" + string(i.object_index)
+                  + " '" + object_get_name(i.object_index) + "'"
+                  + " name '" + _name + "' struc " + string(struc)
+                  + " at " + string(i.x) + "," + string(i.y)
+                  + " mod24 " + string(i.x mod 24) + "," + string(i.y mod 24)
+                  + " mod12 " + string(i.x mod 12) + "," + string(i.y mod 12)
+                  + " sprite " + string(i.sprite_index)
+                  + " depth " + string(i.depth));
+
 if (global.coopIsHost) {
     // i.depth is not the game's depth yet - OnStructureSpawn() runs before the
     // instance is y-sorted (a furnace at y=656 announced depth 0 and settled at

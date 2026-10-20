@@ -15,7 +15,32 @@ if (keyboard_check_pressed(vk_f3)) CoopProbeItems();
 
 if (!global.coopPeerAlive) exit;
 
+// **"Am I in a world?" is asked here, not remembered from a room event.** A flag set by
+// OnRoomLoad looked right and was wrong: the probe of 2026-10-20 showed OnRoomLoad arriving
+// only with `player=0` - the game fires it on the way *out* (and twice), never on the way in -
+// so a `coopWorldLoaded` flag stayed false for a whole session and this exit killed the mod's
+// entire per-frame half: no heartbeat, no POS, and the host silently ignored nothing at all
+// because it looked alive while doing no work. A live check has no such edge, and needs no
+// builtin this build lacks.
+//
+// `objPlayer` exists is the honest test: it is the same guard the events already use, and
+// OnStep runs from the system step, which the game keeps calling while a room is torn down -
+// exactly the frames where a remembered flag and reality disagree.
+if (!instance_exists(objPlayer)) exit;
+
 global.coopTick += 1;
+
+// Diagnostic, temporary (leave-world crash, 2026-10-20): one line every ~5 seconds (300 ticks
+// at 60 fps), reporting how many packets this side has handled and whether the world is
+// alive. Deliberately low-volume: an earlier diagnostic here fired **every frame** (its
+// counter sat before the increment, so the modulo condition never stopped being true), which
+// flooded the socket with hundreds of packets a second - a self-inflicted load that had to be
+// ruled out before any other reading could be trusted.
+if (global.coopTick mod 300 == 0) {
+    CoopSendDebugLine("probe tick " + string(global.coopTick)
+                      + " rx " + string(global.coopRxCount)
+                      + " player " + string(instance_exists(objPlayer)));
+}
 
 // heartbeat: keep at most one ping in flight
 if (global.coopTick mod 90 == 0 && global.coopPingSentAt < 0) {
@@ -102,7 +127,7 @@ if (global.coopBushObj == -2) {
           + " of 3 plant objects: " + string(global.coopBushObj));
 }
 
-if (array_length(global.coopBushObj) > 0) {
+if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
     var _prev_obj = global.coopBushObjAt;   // object index of each plant, last step
     var _prev_id  = global.coopBushIds;     // its instance id
     var _prev_x   = global.coopBushXs;      // its x

@@ -39,7 +39,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.21-m2s";
+global.coopVersion  = "0.0.26-m2x";
 global.coopProtocol = 4;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY)
@@ -81,10 +81,17 @@ global.coopBushIds    = [];     // its instance id
 global.coopBushXs     = [];     // its x
 global.coopBushYs     = [];     // its y
 global.coopBushObj    = -2;     // -2 = unresolved, -1 = no such object in this build
+
 global.coopPingNonce   = 0;
 global.coopPingSentAt  = -1;
 global.coopPingMs      = -1;
 global.coopTick        = 0;
+// Diagnostic (leave-world crash, 2026-10-20): how many packets this side has handled, sent to
+// the peer every few seconds so the **last number before the connection drops** says whether
+// the receive side was alive when the game died. It is what separated "the mod is stuck" from
+// "the game is gone" for the OnRoomLoad probes, and the same trick is what will say whether
+// the crash is tied to processing a packet. Remove with the rest of the diagnostics.
+global.coopRxCount     = 0;
 
 // ---------------------------------------------------------------------------
 // M2: host-authoritative world state.

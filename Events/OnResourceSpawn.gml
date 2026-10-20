@@ -18,7 +18,7 @@
 // world, so a surprise costs a log line, not a desync.
 
 if (!global.coopPeerAlive) return;        // no one to listen
-if (!instance_exists(objPlayer)) return;  // menus, logo rooms
+if (!instance_exists(objPlayer)) return;  // menus, logo rooms, or a room being torn down
 if (!instance_exists(l)) return;
 
 // Volume guard. Loading a save or changing a room can spawn every resource on the

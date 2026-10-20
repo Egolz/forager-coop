@@ -134,6 +134,6 @@ if (_name == "") _name = "peer";
 // The name sits just above the sprite's head. `_top` is already the sprite's top edge, and
 // the text is 60% of the default font, so a fixed gap of a few pixels is enough.
 draw_set_halign(fa_center);
-draw_text_ext_transformed_color(_x, _top - 11, _name, 12, 200, 0.6, 0.6, 0,
+draw_text_ext_transformed_color(_x, _top - 9, _name, 12, 200, 0.45, 0.45, 0,
                                 c_white, c_white, c_white, c_white, 1);
 draw_set_halign(fa_left);

@@ -39,7 +39,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.39-m3f";
+global.coopVersion  = "0.0.40-m3g";
 global.coopProtocol = 5;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -111,6 +111,7 @@ global.coopPeerKey  = "";
 // the world objects nearby carried real ones (963, 964). So the body is a constant asset, not
 // a property of the instance. See CoopResolveBodySprite.
 global.coopBodySprite = -1;
+global.coopBodyTried = false;
 global.coopBodyProbeDone = false;
 // Where the peer is actually drawn. The host decides, because the host is the side that
 // knows the world - a peer with no physics (the mock) reports a position inside a tree or in

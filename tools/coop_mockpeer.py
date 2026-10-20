@@ -703,23 +703,33 @@ class Peer:
                 self.send(ping(self.nonce))
                 log(f"-> PING nonce={self.nonce}")
                 self.last_ping = now
-            # **Stand still.** The mock is a stand-in for a second player, not a player: it has
-            # no walk command, so it has no business following the host.
+            # **Stand still, but reappear if the owner walks away.**
             #
-            # The earlier version walked a small square around `self.player` - the **host's**
-            # position - which glued the puppet to the host's camera. The owner noticed it as
-            # "the mock follows the player's camera" (live, 2026-10-21), and it is wrong: a
-            # peer that is not told to walk does not walk.
+            # The mock is a stand-in for a second player, not a player: it has no walk
+            # command, so it has no business following the host frame by frame. The earlier
+            # version walked a small square around the host's *live* position, which glued
+            # the puppet to the host's camera - the owner noticed it as "the mock follows
+            # the player" (live, 2026-10-21).
             #
-            # So the anchor is picked **once**, when the mock first learns where the host is,
-            # and then it stays where it was put. It starts next to the host, which is what
-            # makes it visible, and it does not follow from there.
+            # But a stand-in that stays where it was put is not much use either: the owner
+            # walked off and the mock was left behind, out of sight ("it appeared not next
+            # to me"). So the anchor is **re-picked when the host gets far from it**: the
+            # mock stands still while the owner is in the area, and reappears nearby when
+            # the owner has genuinely gone somewhere else. A 200 px leash is long enough
+            # that the mock reads as stationary and short enough that it is never lost.
             #
             # The build spots are a different thing and keep using the host's live position:
             # the host validates them, and a build that lands where the owner is standing is
             # the only placement test worth running.
-            if self.anchor is None and self.player is not None:
-                self.anchor = (self.player[0] - 96, self.player[1])
+            if self.player is not None:
+                if self.anchor is None:
+                    self.anchor = (self.player[0] - 96, self.player[1])
+                else:
+                    _dx = self.player[0] - self.anchor[0]
+                    _dy = self.player[1] - self.anchor[1]
+                    if _dx * _dx + _dy * _dy > 200 * 200:
+                        self.anchor = (self.player[0] - 96, self.player[1])
+                        log(f"   re-anchoring at {self.anchor} - the host moved away")
             ax, ay = self.anchor if self.anchor is not None else (620, 620)
             self.px, self.py = ax, ay
             self.send(pos(ax, ay, angle=0, facing=1, sprite=-1, image=0, room=self.room))

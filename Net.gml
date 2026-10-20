@@ -278,19 +278,20 @@ CoopSend(_b);
 // scheme: `sprBeetIdle`, `sprBeetWalk` - spr<Name><State>. The player's own pair is
 // `sprPlayerIdle` / `sprPlayerWalk`.
 //
-// The asset's **file** name is `sprPlayerIdle` - it is one of the 1389 `spr*` names in
-// data.win's string table - but `asset_get_index` takes the **display** name, which in
-// GameMaker is the file name without the `spr` prefix. Asking for "sprPlayerIdle" therefore
-// returns -1 and the puppet is silently not drawn at all, which is exactly what the owner
-// saw ("the mock did not spawn"). The candidates are tried in turn, and which one resolved
-// is reported over the wire, so the log says which name is the right one instead of this
-// being a guess that quietly draws nothing.
-if (global.coopBodySprite < 0) {
-    global.coopBodySprite = asset_get_index("PlayerIdle");
-    if (global.coopBodySprite < 0) global.coopBodySprite = asset_get_index("Player Idle");
-    if (global.coopBodySprite < 0) global.coopBodySprite = asset_get_index("sprPlayerIdle");
-    if (global.coopBodySprite < 0) global.coopBodySprite = asset_get_index("PlayerWalk");
-    if (global.coopBodySprite < 0) global.coopBodySprite = asset_get_index("Player Walk");
+// The asset's name in this build is **`sprPlayerIdle`** - the string table of data.win holds
+// `sprPlayerIdle` and `sprPlayerWalk` and *not* "PlayerIdle" or "Player Walk", so the prefix
+// is part of the name here, unlike in a stock GameMaker project.
+//
+// **`0` means "not found" in this build, not -1.** Asking for the wrong name returned 0, and
+// the chain of candidates stopped there, so the puppet was never drawn - the owner saw "the
+// mock did not spawn", with no error anywhere. A sprite index of 0 is the "no sprite" value,
+// so it is useless to draw and must not be mistaken for a hit.
+if (!global.coopBodyTried) {
+    global.coopBodyTried = true;
+    global.coopBodySprite = asset_get_index("sprPlayerIdle");
+    if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("sprPlayerWalk");
+    if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("PlayerIdle");
+    if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("Player Idle");
 }
 
 #define CoopStandSpot(_x, _y)
@@ -314,7 +315,7 @@ if (_ss_key != global.coopStandKey) {
     var _ss_ox = floor(_x / 16) * 16 + 8;   // the cell's centre
     var _ss_oy = floor(_y / 16) * 16 + 8;
     var _ss_done = false;
-    for (var _ss_r = 0; _ss_r <= 4 && !_ss_done; _ss_r += 1) {
+    for (var _ss_r = 0; _ss_r <= 2 && !_ss_done; _ss_r += 1) {
         for (var _ss_dy = -_ss_r; _ss_dy <= _ss_r && !_ss_done; _ss_dy += 1) {
             for (var _ss_dx = -_ss_r; _ss_dx <= _ss_r && !_ss_done; _ss_dx += 1) {
                 // only the ring, except for the centre cell

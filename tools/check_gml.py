@@ -84,17 +84,32 @@ LOADER_BLOCKED = {
 # console, fix, repeat), and that is exactly the loop the wire-layout check below was written
 # to break. So the arities learned from the loader are recorded here and checked locally.
 #
+# **This build's text functions are not GameMaker's.** The loader rejected the stock
+# `draw_text_ext(x, y, string, color, alpha, alignment, xscale, yscale)` with "takes 5
+# arguments, got 8", and the one mod that runs in this build shows the real shapes:
+#
+#     draw_text_ext(x, y, string, size, width)                                  5
+#     draw_text_ext_transformed_color(x, y, string, size, width,
+#                                     xscale, yscale, rotation,
+#                                     c1, c2, c3, c4, alpha)                    13
+#     draw_text_transformed_color(x, y, string, xscale, yscale, rotation,
+#                                  c1, c2, c3, c4, alpha)                         11
+#
 # Live evidence:
 #   2026-10-21  `sprite_get_yoffset` takes 1 argument - the subimage variant of the sprite
 #               getters is not in this build, unlike in the GameMaker manual.
+#   2026-10-21  `draw_text_ext` takes 5 arguments, and the two transformed variants take 13
+#               and 11 - all copied from the reference mod's own calls, which render.
 BUILTIN_ARITIES = {
     "sprite_get_yoffset": 1,
     "sprite_get_height": 1,
     "sprite_get_width": 1,
     "string_width": 1,
     "string_height": 1,
-    "draw_text_ext": 8,
     "draw_sprite_ext": 9,
+    "draw_text_ext": 5,
+    "draw_text_ext_transformed_color": 13,
+    "draw_text_transformed_color": 11,
 }
 
 NAMES = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")

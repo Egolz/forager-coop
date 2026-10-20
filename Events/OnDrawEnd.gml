@@ -61,33 +61,45 @@ if (_face == 0) _face = 1;
 
 draw_sprite_ext(_spr, 0, _x, _y - 30, _face, 1, 0, c_white, 0.85);
 
-// The name, centred over the puppet and small enough to read as a label rather than as a
-// signpost.
+// The name, centred over the puppet.
 //
-// The position is **computed, not guessed**. A sprite's origin is not its top-left corner:
-// `sprite_get_yoffset` says how far down the origin sits inside the image, so when the sprite
-// is drawn at (x, y) its top edge is at `y - yoffset`. A fixed pixel offset was wrong by most
-// of a sprite, which is why the name first landed *inside* the puppet instead of above its
-// head.
+// **This build's text functions are not GameMaker's.** The loader rejected the stock call:
+// `draw_text_ext` takes 5 arguments, got 8. Forager ships its own, and the one mod that runs
+// in this build shows what they are:
 //
-// **One argument, not two.** This build's `sprite_get_yoffset` takes only the sprite - the
-// subimage variant is not in it, and the mod loader's error says so exactly:
-// `sprite_get_yoffset` takes 1 argument, got 2. The same goes for `sprite_get_height`.
+//     draw_text_ext(x, y, string, size, width)                                    // 5
+//     draw_text_ext_transformed_color(x, y, string, size, width,
+//                                     xscale, yscale, rotation,
+//                                     c1, c2, c3, c4, alpha)                    // 13
+//     draw_text_transformed_color(x, y, string, xscale, yscale, rotation,
+//                                  c1, c2, c3, c4, alpha)                         // 11
 //
-// `draw_text_ext` takes the alignment and the scale as arguments, so this needs no draw state
-// at all - which matters, because the game's own HUD text is drawn in the same frame and
-// would otherwise inherit whatever this left behind. The horizontal centring is done by hand
-// (`string_width` is the unscaled width, so it is scaled by hand too) because the alignment
-// argument of `draw_text_ext` is horizontal only, and `fa_center` is a constant this build
-// does not export.
+// (From the reference mod's GUI.gml - `draw_text_ext_transformed_color(textBox.x1+10,
+// textBox.y1+10, _str, 30, ((textBox.x2-textBox.x1)+100-5), .7, .7, 0, _color, _color,
+// _color, _color, _alpha)`.) The stock `draw_text_ext` has alignment and two scales; this
+// one has a **size** and a **width** instead, so the stock call cannot be adapted by
+// argument order - it is a different function.
+//
+// The transformed variant is used because it takes the size directly, which is what a small
+// label needs, and because the shape above is copied from a call that demonstrably renders in
+// this build rather than guessed. The four colours are all the same, exactly as the reference
+// mod passes them, so the text is one flat colour.
+//
+// The vertical position is **computed, not guessed**: a sprite's origin is not its top-left
+// corner, and `sprite_get_yoffset` says how far down the origin sits inside the image, so
+// when the sprite is drawn at (x, y) its top edge is at `y - yoffset`. A fixed pixel offset
+// was wrong by most of a sprite, which is why the name first landed *inside* the puppet.
+//
+// The horizontal centring uses `draw_set_halign`, and the previous alignment is put back
+// afterwards: the game's own HUD text is drawn in the same frame, and the reference mod
+// manages its alignment the same way (it sets `fa_left` / `fa_top` before its own draws).
 var _name = global.coopPeerName;
 if (_name == "") _name = "peer";
 
 var _yd  = _y - 30;                              // where the sprite is drawn
 var _top = _yd - sprite_get_yoffset(_spr);       // the sprite's top edge
 
-var _scale = 0.6;
-var _nw = string_width(_name) * _scale;
-var _nh = string_height(_name) * _scale;
-
-draw_text_ext(_x - _nw / 2, _top - _nh - 3, _name, c_white, 1, fa_left, _scale, _scale);
+draw_set_halign(fa_center);
+draw_text_ext_transformed_color(_x, _top - 16, _name, 12, 200, 1, 1, 0,
+                                c_white, c_white, c_white, c_white, 1);
+draw_set_halign(fa_left);

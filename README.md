@@ -11,10 +11,10 @@ toolchain. The mod is a folder of `.gml` files that Forager compiles itself.
 
 | | | 
 |---|---|
-| Milestone | **M2.1 of M5** — networking, presence and *structure placement* |
-| What works | Host/join over TCP, a version-checked handshake, ping/pong, and you can see your friend's marker in the world. Structure placement is implemented host-authoritatively (the client asks, the host decides and broadcasts) — **awaiting its first live test**, see below. |
-| What does **not** work yet | **The world is still not synced.** Terrain, resources, items, mobs and quests are independent per player, and there is no world snapshot on join, so the two players must already be looking at the same world for structure sync to mean anything. |
-| Tested on | Forager, Steam build **6160665** (Windows) |
+| Milestone | **M3.1 of M5** — the visible second player: sprite, position and name |
+| What works | Host/join over TCP, a version-checked handshake, ping/pong. The other player is **drawn**: their body sprite, their position, their facing, and their name over their head. Structure placement is host-authoritative (the client asks, the host decides and broadcasts). Loot, pickups and harvested resources sync. |
+| What does **not** work yet | **The world is still not synced.** Terrain, resources, items, mobs and quests are independent per player, and there is no world snapshot on join, so the two players must already be looking at the same world for sync to mean anything. |
+| Tested on | Forager, Steam build **6160665** (Windows) — all of the above verified in the live game |
 
 The protocol layer itself (framing, encoding, both directions) does have an automated
 check you can run without the game: `python tools/coop_mockpeer.py selftest`.
@@ -87,7 +87,12 @@ the join will just time out.
   resources back (inventories are not synced yet).
 - A client can only place while the host is in the world too; if the host is in a menu the
   placement is refused.
-- The remote player is drawn as a **marker**, not the real sprite puppet.
+- The remote player is drawn as their **body sprite** now, but the animation is not synced:
+  the puppet is a still frame, so it does not walk. The body sprite is resolved by name
+  (`sprPlayerIdle`) because the player's instance reports a sprite index of 0 in this build.
+- The remote player is drawn on **ground the host approves** - a peer with no physics can
+  report a position inside a tree or in the water, and the host pulls it onto a cell a body
+  could stand on.
 - Exactly **2 players**; no more.
 - No NAT traversal, no Steam friends list, no host migration.
 - Forager refuses to run **two instances on one PC**, so testing needs two machines (or a

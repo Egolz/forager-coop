@@ -44,32 +44,27 @@ if (objPlayer.room != global.coopPeer.room) exit;
 // was the packet that had no sprite in it. Requiring a sprite from a peer that cannot supply one
 // made a cosmetic dependency into a hard one.
 //
-// So the peer's sprite is used when it has one and the **host's own player sprite** stands in
-// when it does not. Falling back to a real sprite (rather than to a circle or a primitive) keeps
-// this file free of primitives, which is worth having anyway.
+// The sprite to draw.
 //
-// **But the value is latched, and that is the fix for the blinking.** The peer's `POS` carries
-// the sender's `objPlayer.sprite_index`, and in this build that value is **not** a sprite
-// index: it measured 0 on 19366 frames and 1 on 7354 (live, 2026-10-21), while the game's
-// sprites are numbered from about 1000. It is a flag, not an asset. Taking it as-is made the
-// puppet blink in and out - exactly what the owner reported ("it appears only when I walk"):
-// the value was usable only part of the time.
-//
-// So the last **usable** value is held and reused, and a peer that sends a real sprite index is
-// used as sent.
+// The peer's `POS` now carries the **body sprite** - a real asset index, resolved by name on
+// the peer's side (see CoopResolveBodySprite), because the player's instance reports
+// `sprite_index` 0 in this build. When the peer cannot supply one (the mock peer has no
+// assets and sends -1), the host's own body sprite stands in: it is the same game, so it is
+// the same body.
 var _spr = global.coopPeer.sprite;
-if (_spr > 0) {
-    global.coopLastPeerSprite = _spr;
-} else {
-    _spr = objPlayer.sprite_index;
-    if (_spr > 0) global.coopLastLocalSprite = _spr;
-    else _spr = global.coopLastLocalSprite;
-    if (_spr <= 0) _spr = global.coopLastPeerSprite;
+if (_spr <= 0) {
+    CoopResolveBodySprite();
+    _spr = global.coopBodySprite;
 }
 if (_spr <= 0) exit;
 
-var _x = global.coopPeer.x;
-var _y = global.coopPeer.y;
+// Where the peer is drawn. **The host decides.** A peer with no physics - the mock - reports
+// a position that can be inside a tree or in the water, and the owner saw exactly that. The
+// host knows the world, so it pulls the peer onto ground a body could stand on, which is the
+// same pair of checks the placement code already asks. See CoopStandSpot.
+CoopStandSpot(global.coopPeer.x, global.coopPeer.y);
+var _x = global.coopStandX;
+var _y = global.coopStandY;
 
 // Facing is signed (1 right, -1 left) and scales x only, exactly as the game draws its own
 // player. Alpha is passed per call: no global draw state is touched, so nothing to restore.
@@ -117,6 +112,6 @@ var _yd  = _y - 30;                              // where the sprite is drawn
 var _top = _yd - sprite_get_yoffset(_spr);       // the sprite's top edge
 
 draw_set_halign(fa_center);
-draw_text_ext_transformed_color(_x, _top - 15, _name, 10, 200, 1, 1, 0,
+draw_text_ext_transformed_color(_x, _top - 11, _name, 12, 200, 0.6, 0.6, 0,
                                 c_white, c_white, c_white, c_white, 1);
 draw_set_halign(fa_left);

@@ -266,6 +266,69 @@ buffer_write(_b, buffer_u8, CoopCmd.PONG);
 buffer_write(_b, buffer_u32, _nonce);
 CoopSend(_b);
 
+#define CoopResolveBodySprite()
+// The sprite that is the player's body, resolved once and cached in
+// `global.coopBodySprite` (-1 = not found yet).
+//
+// **The player's instance does not carry it.** The live body probe of 2026-10-21 walked the
+// objects around the player and found the whole chain - `parEntity` #20, `objPlayer` #22,
+// `parAlly` #46 - all at the player's exact position, all reporting `sprite_index` 0, while
+// the world objects nearby carried real sprites (963, 964). Forager draws the body from a
+// constant asset instead of from the instance, and the cosmetic database shows the naming
+// scheme: `sprBeetIdle`, `sprBeetWalk` - spr<Name><State>. The player's own pair is
+// `sprPlayerIdle` / `sprPlayerWalk`.
+//
+// `asset_get_index` is the honest way to get the index: it returns -1 for a name that is not
+// in the build, so a wrong name fails visibly instead of drawing the wrong thing.
+if (global.coopBodySprite < 0) {
+    global.coopBodySprite = asset_get_index("sprPlayerIdle");
+    if (global.coopBodySprite < 0) global.coopBodySprite = asset_get_index("sprPlayerWalk");
+}
+
+#define CoopStandSpot(_x, _y)
+// Where the peer may be **drawn**: the reported position if a body could stand there, else
+// the nearest cell where one could. Sets `global.coopStandX` / `global.coopStandY`.
+//
+// The mock peer has no physics, so it reports a position that can be inside a tree or in the
+// water - the owner saw exactly that ("the mock can spawn in an impossible spot"). The host
+// knows the world, so the host decides: a peer is drawn on ground a body could stand on.
+//
+// The two questions are the ones the placement check already asks: water by
+// `WaterCollision` (the game's own answer, measured live), occupied ground by
+// `CoopSolidInCell` - a **cell** membership test, not a radius, on the world's 16 px cells.
+//
+// The search is a spiral over **cells**, so the answer lands on the lattice rather than
+// between two cells, and it is cached by the peer's cell: the peer standing still does not
+// make the host search every frame.
+var _ss_key = string(floor(_x / 16)) + "," + string(floor(_y / 16));
+if (_ss_key != global.coopStandKey) {
+    global.coopStandKey = _ss_key;
+    var _ss_ox = floor(_x / 16) * 16 + 8;   // the cell's centre
+    var _ss_oy = floor(_y / 16) * 16 + 8;
+    var _ss_done = false;
+    for (var _ss_r = 0; _ss_r <= 4 && !_ss_done; _ss_r += 1) {
+        for (var _ss_dy = -_ss_r; _ss_dy <= _ss_r && !_ss_done; _ss_dy += 1) {
+            for (var _ss_dx = -_ss_r; _ss_dx <= _ss_r && !_ss_done; _ss_dx += 1) {
+                // only the ring, except for the centre cell
+                if (_ss_r > 0 && abs(_ss_dx) != _ss_r && abs(_ss_dy) != _ss_r) continue;
+                var _ss_cx = _ss_ox + _ss_dx * 16;
+                var _ss_cy = _ss_oy + _ss_dy * 16;
+                if (WaterCollision(_ss_cx, _ss_cy) != 0) continue;
+                if (CoopSolidInCell(_ss_cx, _ss_cy) != 0) continue;
+                global.coopStandX = _ss_cx;
+                global.coopStandY = _ss_cy;
+                _ss_done = true;
+            }
+        }
+    }
+    if (!_ss_done) {
+        // Nothing free within four cells: leave the peer where it said it was rather than
+        // inventing a position it never claimed.
+        global.coopStandX = _x;
+        global.coopStandY = _y;
+    }
+}
+
 #define CoopSendPos()
 if (!global.coopPeerAlive) exit;
 if (!instance_exists(objPlayer)) exit;
@@ -276,7 +339,11 @@ buffer_write(_b, buffer_s32, floor(objPlayer.x));
 buffer_write(_b, buffer_s32, floor(objPlayer.y));
 buffer_write(_b, buffer_u16, floor(objPlayer.angle));
 buffer_write(_b, buffer_s8, floor(objPlayer.facing));
-buffer_write(_b, buffer_s32, objPlayer.sprite_index);
+// The sprite the peer should draw. **Not** `objPlayer.sprite_index`: that reads 0 in this
+// build - the body is drawn from a constant asset, not from the instance - so a peer that
+// sent it could not be drawn at all. See CoopResolveBodySprite.
+CoopResolveBodySprite();
+buffer_write(_b, buffer_s32, global.coopBodySprite);
 // `mod` in GML keeps the sign of the dividend, so a negative image_index would write a
 // negative value into a **u8** field - a byte write outside the field's range, in a buffer
 // that is then handed to the network layer. Normalising to 0..255 first is one `abs` and

@@ -39,7 +39,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.20-m2r";
+global.coopVersion  = "0.0.21-m2s";
 global.coopProtocol = 4;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY)
@@ -70,29 +70,17 @@ global.coopPeerName = "";        // what the peer called themselves ("peer" unti
 // resource coverage is settled.
 global.coopSpawnProbe = 0;
 
-// Temporary: the bush probe (see Events/OnStep.gml, "bush probe"). A first probe watched
-// the bush's **frame**, because PencilPal syncs bushes by watching `image_index` change -
-// and found nothing at all while bushes were picked. A second probe watched for the bush
-// **disappearing**, and that is what happens: `probe bush GONE: id 101898 was 728s600s4`
-// with the berries falling at the same `728,600`, while the census read
-// `standard 5 vs true 5` - so bushes are active and "gone" means **picked**, not "left the
-// room". A picked bush therefore fires **no event**, changes **no frame** and simply
-// vanishes, which is why OnResourceDestroy never saw it. The probe now reports the
-// vanished bush's object index, name, parent and tile, and **sends the removal** as the
-// same RESOURCE_DESTROY the tree and rock already use.
-//
-// The state is four **numeric** parallel arrays (object, id, x, y), not a ds_map and not a
-// packed string: this build has no ds_map_find_first/ds_map_find_next to walk a map, and
-// **no string_split** - the first version of this probe died in the loader with
-// `string_split is not a function or script`. Numbers need neither.
-global.coopBushProbe  = 0;
-global.coopBushGone   = 0;
-global.coopBushCensus = 0;
-global.coopBushObjAt  = [];     // object index of each live bush, last step
-global.coopBushIds    = [];     // their instance ids
-global.coopBushXs     = [];     // their x
-global.coopBushYs     = [];     // their y
-global.coopBushObj    = -2;     // -2 = unresolved, -1 = no bush object in this build
+// Bush / pickable-plant sync state (see Events/OnStep.gml, "bush sync"). A bush is not a
+// resource in this game - its parent is `parHerb` - so no OnResourceDestroy arrives for it
+// and the only way to notice a pick is to remember which plants were here and see which one
+// vanishes. State is four **numeric** parallel arrays (object, id, x, y), filled together in
+// one pass, not a ds_map (this build has no ds_map_find_first/ds_map_find_next to walk one
+// with) and not a packed string (string_split is not in the loader's function table).
+global.coopBushObjAt  = [];     // object index of each plant, last step
+global.coopBushIds    = [];     // its instance id
+global.coopBushXs     = [];     // its x
+global.coopBushYs     = [];     // its y
+global.coopBushObj    = -2;     // -2 = unresolved, -1 = no such object in this build
 global.coopPingNonce   = 0;
 global.coopPingSentAt  = -1;
 global.coopPingMs      = -1;

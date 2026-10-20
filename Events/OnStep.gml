@@ -32,53 +32,81 @@ if (global.coopPingSentAt >= 0 && current_time - global.coopPingSentAt > 5000) {
 if (global.coopTick mod 3 == 0) CoopSendPos();
 
 // ============================================================================
-// Bush probe, second version (M2.2 coverage, 2026-10-20). **Read-only.**
+// Bush/pickable-plant sync (M2.2, live 2026-10-20). **Working sync, not a probe.**
 //
-// The first version watched a bush's `image_index` for a change. It found the three bush
-// objects (`obj#86 obj#90 obj#87`) and then reported **nothing** while two bushes were
-// picked - the owner's berries dropped (`item54` x3, twice) and **no `probe bush changed`
-// line appeared**. So a picked bush does **not** change its frame; it goes away. That
-// matches what the owner said ("исчезает совсем") and rules out the PencilPal
-// `grows`-and-regrow reading for *this* build's berry bush.
+// Why this is an *observation* and not an event. Forager fires OnResourceDestroy for a
+// tree or a rock, and this mod hooks that. It does **not** fire it for a bush: picking one
+// dropped berries (`OnItemDrop fired: item54 x3`) with **no destroy event at all**. Two
+// probes settled what actually happens, rather than assuming:
 //
-// So the probe now inverts: instead of watching for a change, it remembers **which bushes
-// existed** and reports the ones that **vanished**. The report carries the vanished bush's
-// **position** - which is exactly what a RESOURCE_DESTROY line needs - so once this fires
-// we know both the event path and the coordinates to send.
+//   1. A probe watched the bush's `image_index`, because PencilPal syncs bushes by noticing
+//      a frame change (`Events/OnEvent.gml:316-321`). It reported **nothing** while bushes
+//      were picked - a picked bush does **not** change its frame in this build, so the
+//      PencilPal `grows`-and-regrow reading does not apply here.
+//   2. A probe then watched for the bush **disappearing**, and caught it:
 //
-// It still watches for an `image_index` change too, in the same pass: harmless, and if some
-// *other* bush-like object (cotton, flower) does regrow rather than vanish, it will show up
-// here rather than being missed for a second round.
+//        probe bush census: standard 7 vs true 7          <- bushes are active, not merely
+//                                                            deactivated off-screen, so "gone"
+//                                                            means *picked*, not "left the room"
+//        probe bush GONE: obj#86 'objBush' parent 'parHerb' id 101967 at 696,648
+//        OnItemDrop fired: item54 x3 @600,648             <- berries fell on the same tile
 //
-// What this build does NOT have, and why the probe is shaped this way:
-//   - no variable_instance_exists (0 in data.win), so "is this instance a bush" cannot be
-//     asked; the bushes are found by **object name** via asset_get_index instead, using the
-//     names from PencilPal's own list (its Main.gml:65 `["objBush", "objCotton", "objFlower"]`);
-//   - no ds_map_find_first / ds_map_find_next (both 0), so the memory cannot be walked as a
-//     ds_map - it is kept as **two parallel arrays** (ids and their "x s y s image" strings)
-//     instead, which are trivially walkable and cannot crash on a missing iterator;
-//   - try/catch is banned in mod code, so nothing here may depend on a call that can throw.
+//   and the mock confirmed the sync itself:
+//
+//        <- RESOURCE_DESTROY obj#86 at 696,648 room 8
+//        <- DROP item #54 x1 at 600,648   (x3)
+//        <- RESOURCE_DESTROY obj#86 at 600,648 room 8
+//        <- PICKUP item #54 at 628,656 room 8
+//
+// **The bush's parent is `parHerb`, not `parResource`** - which is the real reason no
+// destroy event ever arrived: in the game's own taxonomy a bush is not a resource, it is a
+// herb. That is also why PencilPal keeps a separate `["objBush", "objCotton", "objFlower"]`
+// list instead of treating it with the trees.
+//
+// So a bush must be **observed**: remember which ones were here, and when one vanishes
+// announce the very same RESOURCE_DESTROY the tree uses (object index + tile). Reusing the
+// existing packet means the far end needs no new code - `CoopApplyResourceDestroy` already
+// matches on index+tile and walks with TrueInstanceNumber, and it destroys whatever bush
+// index it is handed.
+//
+// **Known limitation (accepted 2026-10-20):** the walk uses `instance_number`/`instance_find`,
+// which only see instances **active in the current room**. A bush picked somewhere the player
+// is not standing is never seen to vanish, so the peer keeps it. Widening it to
+// `TrueInstanceNumber` would catch those, but that pair also sees deactivated instances, and a
+// room change would then look exactly like every bush in the old room being picked at once.
+// Fixing it properly means remembering each bush's room, which is deferred with the rest of the
+// room-scoped world work. Until then: bushes sync while in view.
+//
+// What this build does NOT have, and how the shape below works around it:
+//   - no `variable_instance_exists`, so "is this instance a bush" cannot be asked. The bush
+//     objects are looked up **by name** instead, via `asset_get_index`, using PencilPal's own
+//     three names; a name this build lacks returns -1 and simply drops out.
+//   - no `ds_map_find_first`/`ds_map_find_next`, so a ds_map cannot be walked. State is kept
+//     as four **numeric** parallel arrays, filled together in one pass.
+//   - no `string_split` (it is present in data.win but **not in the loader's function table** -
+//     the first version of this probe failed to load on exactly that call). Nothing here uses
+//     a string function: the arrays hold numbers, not a packed record.
+//   - `hp` and `grows` are deliberately never read: nothing can test for their presence, and a
+//     missing field would take the game down. Only `x`, `y` and `object_index` are touched,
+//     which every drawn instance has.
 
-// Resolve the bush objects once per session. asset_get_index returns **-1**, not an error,
-// for a name this build lacks, so an absent bush object just drops out of the list.
+// Resolve the bush objects once per session.
 if (global.coopBushObj == -2) {
     global.coopBushObj = [];
-    var _names = ["objBush", "objCotton", "objFlower"];
-    for (var _n = 0; _n < array_length(_names); _n += 1) {
-        var _idx = asset_get_index(_names[_n]);
-        if (_idx >= 0) array_push(global.coopBushObj, _idx);
+    var _bush_names = ["objBush", "objCotton", "objFlower"];
+    for (var _bn = 0; _bn < array_length(_bush_names); _bn += 1) {
+        var _bidx = asset_get_index(_bush_names[_bn]);
+        if (_bidx >= 0) array_push(global.coopBushObj, _bidx);
     }
-    CoopSendDebugLine("probe bush: resolved " + string(array_length(global.coopBushObj))
-                      + " bush object(s) of 3: " + string(global.coopBushObj));
+    Trace("Co-op: bush sync watching " + string(array_length(global.coopBushObj))
+          + " of 3 plant objects: " + string(global.coopBushObj));
 }
 
 if (array_length(global.coopBushObj) > 0) {
-    // Four numeric parallel arrays (object, id, x, y), recorded last step. See the push
-    // site for why these are separate arrays of numbers rather than one packed string.
-    var _prev_obj = global.coopBushObjAt;
-    var _prev_id  = global.coopBushIds;
-    var _prev_x   = global.coopBushXs;
-    var _prev_y   = global.coopBushYs;
+    var _prev_obj = global.coopBushObjAt;   // object index of each plant, last step
+    var _prev_id  = global.coopBushIds;     // its instance id
+    var _prev_x   = global.coopBushXs;      // its x
+    var _prev_y   = global.coopBushYs;      // its y
     var _now_obj  = [];
     var _now_id   = [];
     var _now_x    = [];
@@ -86,29 +114,10 @@ if (array_length(global.coopBushObj) > 0) {
 
     for (var _b = 0; _b < array_length(global.coopBushObj); _b += 1) {
         var _obj   = global.coopBushObj[_b];
-        // instance_number/instance_find are the standard pair; the True* pair that
-        // CoopApplyResourceDestroy uses also sees deactivated instances. Bushes that are
-        // off-room may be deactivated, and a deactivated bush that becomes active is a
-        // *change of being seen*, not a pick - so both counts are logged once, to tell
-        // the two apart instead of mistaking a room change for a harvest.
         var _count = instance_number(_obj);
         for (var _i = 0; _i < _count; _i += 1) {
             var _inst = instance_find(_obj, _i);
             if (!instance_exists(_inst)) continue;
-            // Four **numeric** parallel arrays, filled together in one pass and never
-            // touched again: object index, instance id, x, y. They are pushed in the same
-            // iteration, so they cannot drift; the earlier worry about parallel arrays
-            // going out of step applies to arrays written at different times, which these
-            // are not. Numbers, not a packed string, on purpose: unpacking a string needs
-            // string_split/string_copy, and **string_split is not in this build's function
-            // table** (it is only `fgml_std_string_split`, a library symbol) - the first
-            // run of this probe died with exactly
-            // `Mod failed to unit! Forager Coop/Net.gml[L411,c11] string_split is not a
-            // function or script`. Nothing here needs a string function at all now.
-            //
-            // Only fields every drawn object has are read - `hp` and `grows` are
-            // deliberately NOT touched, because this build has no variable_instance_exists
-            // to test them with and a missing field would take the game down.
             array_push(_now_obj, _inst.object_index);
             array_push(_now_id,  _inst);
             array_push(_now_x,   floor(_inst.x));
@@ -116,41 +125,15 @@ if (array_length(global.coopBushObj) > 0) {
         }
     }
 
-    // A bush that was here last step and is gone now. The instance is gone, so its object
-    // index, x and y can only come from the arrays recorded last step - which is why those
-    // are stored and not just the id.
-    //
-    // This is the finding of the second probe (live 2026-10-20): picking a bush produced
-    // **no event and no frame change** - the instance simply vanished - while the census
-    // showed `standard 5 vs true 5`, i.e. bushes are active and "gone" means picked, not
-    // "left the room". The vanished bush's position matched the berry drop exactly
-    // (`GONE ... 728s600s4` and the berries fell at `728,600`). So the bush has no event to
-    // hook and must be **observed**, and its removal then travels as the very packet the
-    // tree and rock already use.
+    // A plant that was here last step and is gone now is a pick. Both halves are needed:
+    // the previous step says *what* and *where* it was (the instance is already gone and
+    // cannot be asked), the current step says whether it is still alive.
     for (var _p = 0; _p < array_length(_prev_id); _p += 1) {
-        var _still_there = false;
+        var _bush_alive = false;
         for (var _q = 0; _q < array_length(_now_id); _q += 1) {
-            if (_now_id[_q] == _prev_id[_p]) { _still_there = true; break; }
+            if (_now_id[_q] == _prev_id[_p]) { _bush_alive = true; break; }
         }
-        if (_still_there) continue;
-
-        global.coopBushGone += 1;
-        if (global.coopBushGone > 20) continue;    // volume guard
-
-        CoopSendDebugLine("probe bush GONE #" + string(global.coopBushGone)
-                          + ": obj#" + string(_prev_obj[_p])
-                          + " '" + object_get_name(_prev_obj[_p]) + "'"
-                          + " parent '" + object_get_name(object_get_parent(_prev_obj[_p])) + "'"
-                          + " id " + string(_prev_id[_p])
-                          + " at " + string(_prev_x[_p]) + "," + string(_prev_y[_p])
-                          + " room " + string(objPlayer.room));
-
-        // **The sync itself, tried for real.** A bush goes away the same way a tree does,
-        // so it goes out the same way: RESOURCE_DESTROY with the object index and the tile.
-        // This is safe to send even while the probe is still running - the far end already
-        // knows how to remove a resource by index+position (CoopApplyResourceDestroy), and
-        // its walk uses TrueInstanceNumber, so a bush object index it is handed will be
-        // found and destroyed. Nothing new is invented; the packet that exists is reused.
+        if (_bush_alive) continue;
         CoopSendResourceDestroy(_prev_x[_p], _prev_y[_p], _prev_obj[_p]);
     }
 
@@ -158,22 +141,4 @@ if (array_length(global.coopBushObj) > 0) {
     global.coopBushIds   = _now_id;
     global.coopBushXs    = _now_x;
     global.coopBushYs    = _now_y;
-
-    // One-off census, so a silent probe can be told apart from "there are no bushes here".
-    // It reports the **standard** count and the **TrueInstance** count side by side: the
-    // standard pair skips deactivated instances, the True pair is what
-    // CoopApplyResourceDestroy walks. If they disagree, bushes are being deactivated while
-    // off-screen, and "GONE" would then mean "left the room" rather than "was picked" -
-    // exactly the confusion this line exists to prevent.
-    global.coopBushCensus += 1;
-    if (global.coopBushCensus == 60 || global.coopBushCensus == 300) {
-        var _true_total = 0;
-        for (var _t = 0; _t < array_length(global.coopBushObj); _t += 1) {
-            _true_total += TrueInstanceNumber(global.coopBushObj[_t]);
-        }
-        CoopSendDebugLine("probe bush census #" + string(global.coopBushCensus)
-                          + ": standard " + string(array_length(_now_id))
-                          + " vs true " + string(_true_total)
-                          + " bush instance(s), objects " + string(global.coopBushObj));
-    }
 }

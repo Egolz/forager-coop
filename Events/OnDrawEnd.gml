@@ -69,13 +69,19 @@ var _walking = global.coopPeerWalking;
 // block is the whole decision for it:
 //
 //   * **walking** -> `global.coopWalkSprite` (`sprPlayerWalk`, six frames, resolved by name);
-//   * **standing** -> `CoopResolveIdleSprite()`, the player's **idle** sprite, so the head and
-//     backpack bob. This is the M5k change: before it, a standing peer got the **body** sprite,
-//     and the body sprite is the walk pair - so the puppet stood in a walk stance and the owner
-//     reported that it "uses walk animation while standing still".
+//   * **standing** -> the **body**, which is the walk sprite **held on its standing frame**. The
+//     `...Idle` names in this build are cosmetics **overlays** (glasses, bow, backpack), not bodies:
+//     the run of 2026-10-22 drew `sprPlayerGlassesIdle` for a standing peer and the owner saw
+//     **"only the glasses, the name, and the tree"** - the accessory with no body under it.
 //
-// `sprPlayerIdle` itself does NOT resolve in this build, which is why the idle goes through the
-// candidate chain in `CoopResolveIdleSprite` rather than a single name.
+// So a standing peer is drawn with the same body as a walking one, at frame 0, and **not animated**:
+// the body has no idle animation to play, and the bob the owner sees on their own model is in the
+// overlay layers. `CoopResolveIdleSprite` still answers `-1` for a genuine body idle if one ever
+// turns up, and then the bob is played at the game's own rate (see the idle clock below).
+var _idle_body = -1;              // a real idle BODY sprite, or -1 for "hold the walk sprite"
+if (!_walking) CoopResolveIdleSprite();
+if (!_walking && global.coopIdleSprite > 0) _idle_body = global.coopIdleSprite;
+
 var _spr = global.coopPeer.sprite;
 if (_spr <= 0) {
     var _fallback = -1;
@@ -86,8 +92,8 @@ if (_spr <= 0) {
         }
         _fallback = global.coopWalkSprite;
     } else {
-        CoopResolveIdleSprite();
-        _fallback = global.coopIdleSprite;
+        // The body while standing: a real idle body if the game has one, else the walk sprite held.
+        _fallback = _idle_body;
     }
     if (_fallback <= 0) {
         CoopResolveBodySprite();
@@ -95,6 +101,8 @@ if (_spr <= 0) {
     }
     _spr = _fallback;
 }
+// Is the body being **animated** while standing? Only when there is a real idle body sprite.
+var _idle_anim = (!_walking && _idle_body > 0);
 
 // Where the peer is drawn. **The host decides.** A peer with no physics - the mock - reports
 // a position that can be inside a tree or in the water, and the owner saw exactly that. The
@@ -213,38 +221,38 @@ if (_face == 0) _face = 1;
 // per index-unit (the probe's clean walking samples: 33/2.70, 76/5.85, 75/5.85 = 12.2, 13.0,
 // 12.8). Six units a cycle, the sprite's own length. Standing still does not advance it.
 //
-// **Standing:** the puppet plays the **idle sprite's own bob** - this is the owner's request: "the
-// head and backpack bob while standing still - find that animation and pick up its speed". The
-// speed is the **sprite's own** `sprite_get_speed` / `sprite_get_speed_type`, not a constant, so
-// the bob runs at the rate the game plays that asset. `sprite_get_speed_type` is 0 for
-// frames-per-image and 1 for images-per-frame; the two are inverses and the type decides which
-// arithmetic applies.
+// **Standing:** the frame is **held**, because the body has no idle animation in this build (the
+// `...Idle` names are cosmetic overlays - live, 2026-10-22; see the sprite block above). If a real
+// idle **body** ever resolves (`_idle_anim`), its bob is played at the **game's own animation
+// rate**, which is the honest reading of "pick up its speed":
+//
+//   * `sprite_get_speed` is **useless** for it - every player sprite reports `speed 0`, and in
+//     GameMaker `0` means "use the room's default", not "not animated". The first version of this
+//     code treated that 0 as a real rate, fell back to a made-up 0.006 units/ms, and the owner saw a
+//     **1.0 s** cycle against the player's 0.67 s - "the bob is there but **twice as slow**".
+//   * The rate that *is* real is the one the peer's wire already carries: `coopPeerStepRate`, the
+//     index's rise measured between two packets. That index is the game's **animation clock** - the
+//     free-running timer M5j caught and stopped calling a walk - so its rate is the rate the game
+//     plays an animation. Live it is **+0.45 per packet at 20/s = 9 units/s**, a six-frame cycle in
+//     **0.67 s**, and it holds while the player stands still.
 if (_walking) {
     var _ppu = 12.2;                  // px per index-unit, from the idx probe's walking samples
     global.coopPeerFrameF += global.coopPeerSpeed * _dt / _ppu;
     var _cyc = global.coopStepMax + 1;
     if (global.coopPeerFrameF >= _cyc) global.coopPeerFrameF = global.coopPeerFrameF mod _cyc;
     if (global.coopPeerFrameF < 0) global.coopPeerFrameF = 0;
-} else {
-    // The idle bob. `_idle_n` frames, played at the sprite's own speed.
+} else if (_idle_anim) {
+    // A real idle body: play its bob at the measured animation rate.
     var _idle_n = _spr > 0 ? sprite_get_number(_spr) : 1;
     if (_idle_n < 1) _idle_n = 1;
-    var _idle_units = 0;              // frame-units per millisecond
-    if (_spr > 0 && _idle_n > 1) {
-        var _sp = sprite_get_speed(_spr);
-        var _st = sprite_get_speed_type(_spr);
-        if (_sp > 0) {
-            // GameMaker's sprite speed is frames (or images) per *game step*, and a step here is
-            // 60 a second on this build's own walk constant (`90 px/s` at `SPAWN_ANIM_SPEED`-pace).
-            // Convert to per-millisecond so it is drawn on the same clock as everything else.
-            var _per_step = (_st == 1) ? (1 / _sp) : _sp;
-            _idle_units = _per_step / 16.667;
-        }
-    }
-    if (_idle_units <= 0) _idle_units = 0.006;   // no speed on the asset: a slow, even bob
+    var _idle_units = global.coopPeerStepRate;      // units per millisecond
+    if (_idle_units <= 0.0005) _idle_units = 0.009; // 9 units/s: the live idle/walk index rate
     global.coopIdleFrameF += _idle_units * _dt;
     if (global.coopIdleFrameF >= _idle_n) global.coopIdleFrameF = global.coopIdleFrameF mod _idle_n;
     if (global.coopIdleFrameF < 0) global.coopIdleFrameF = 0;
+} else {
+    // No idle body to animate: settle the walk frame back to its standing pose and hold it.
+    global.coopIdleFrameF = 0;
 }
 var _frame;
 if (_walking) {

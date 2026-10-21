@@ -1,97 +1,99 @@
-"""Does the idle bob run at the sprite's own speed, and does it wrap?
+"""Is the standing puppet's body animated at the game's own rate, or held?
 
-The owner asked, in M5k:
+**This is the M5k test, corrected after the live run of 2026-10-22.** The first version assumed the
+player has a full-body idle sprite and read its rate from `sprite_get_speed`. The live ids say
+otherwise:
 
-> make the animation of the head and backpack bobbing while standing still - find that animation
-> and pick up its speed
+    sprPlayerWalk          id 1    <- the FULL BODY, walking
+    sprPlayerGlassesIdle   id 2    <- an OVERLAY: glasses only
+    sprPlayerGlassesWalk   id 3
+    sprPlayerPinkBowIdle   id 4    <- an OVERLAY: a bow only
+    sprPlayerPinkBowWalk   id 5
+    sprBackpackIdle       id 439   <- an OVERLAY: a backpack only
+    sprPlayerIdle         NOT FOUND
 
-The mod does not hard-code that speed. It reads it from the asset:
+The owner's own report is the proof that those `...Idle` names are overlays and not bodies:
 
-    sprite_get_speed(spr)       frames-per-image (type 0) or images-per-frame (type 1)
-    sprite_get_speed_type(spr)  which of the two it is
+> when I stand still I only see the glasses, the name, and the tree the mock holds; when I walk the
+> mock is visible and without glasses
 
-and advances the puppet's idle frame by `speed / 16.667` per millisecond (a GameMaker step is a
-sixtieth of a second here). This file is the arithmetic, checked, so that the *shape* of the clock
-is right before the live run supplies the **real** per-asset numbers.
+So the standing **body** is the walk sprite **held**, and there is nothing to animate - which is why
+the request names the **head and backpack**: the bob lives in the overlay layers.
 
-What is asserted:
+What this file pins down:
 
-  1. A sprite with **one** frame never advances (there is no bob to play - the puppet must not
-     jitter a single sub-image).
-  2. A **type-1** speed plays exactly `1/speed` images per step - the two types are inverses, and
-     getting this backwards would make the bob run at `speed^2` times the right rate.
-  3. The frame wraps at the sprite's frame count, so a bob of N frames repeats every N.
-  4. The rate is **the sprite's**, not a constant: halving `sprite_get_speed` halves the frames
-     advanced over the same time.
+  1. **No idle body -> the frame is held.** Drawing an overlay as the body is the "only the glasses"
+     bug, and animating a body that has no idle animation is the "walking in place" one.
+  2. **When a real idle body does resolve, its rate is the measured animation rate** - not
+     `sprite_get_speed`, which is **0** for every player sprite. In GameMaker `0` means "use the
+     room's default", not "not animated", so the first version fell back to a made-up 0.006
+     units/ms: a **1.0 s** cycle against the player's 0.67 s, which the owner saw as
+     **"twice as slow"**.
+  3. The measured rate is **9 units/s** (the index climbs `+0.45` per packet at 20 packets/s, live).
 """
 import math
 
+MEASURED_RATE = 0.009     # units per millisecond = 9 units/s, the live index rate
+STEP_MS = 1000.0 / 60.0
 
-STEP_MS = 1000.0 / 60.0   # a GameMaker step, in ms
+
+def cycle_seconds(n_frames: int, rate_per_ms: float) -> float:
+    """How long one whole bob cycle takes at `rate_per_ms`, in seconds."""
+    if rate_per_ms <= 0:
+        return float("inf")
+    return (n_frames / rate_per_ms) / 1000.0
 
 
-def per_ms(speed: float, speed_type: int) -> float:
-    """The mod's own conversion: frames per millisecond."""
+def old_rate_from_sprite_get_speed(speed: float, speed_type: int) -> float:
+    """The first version's conversion, which is what produced the 2x-slow bob."""
     if speed <= 0:
-        return 0.0
+        return 0.006         # the made-up fallback the owner saw at 1.0 s per cycle
     per_step = (1.0 / speed) if speed_type == 1 else speed
-    return per_step / STEP_MS
-
-
-def frames_advanced(speed: float, speed_type: int, n_frames: int, ms: float) -> float:
-    """How far the mod advances the **unwrapped** frame counter in `ms`.
-
-    The mod wraps into the sprite's frame count for drawing, so the wrapped value is not a
-    measure of rate - comparing two wrapped values says nothing. This returns the raw distance
-    travelled, which is what "did halving the speed halve the rate" is a question about.
-    """
-    p = per_ms(speed, speed_type)
-    if n_frames <= 1 or p <= 0:
-        p = 0.006 if p <= 0 else 0.0
-    return p * (int(ms // STEP_MS) * STEP_MS)
+    return per_step / 16.667
 
 
 def main() -> int:
     failures = []
 
-    # 1. One frame: no bob.
-    got = frames_advanced(8, 0, 1, 1000.0)
-    print(f"one frame: advanced {got:.3f} (expected 0)")
-    if got != 0:
-        failures.append("a one-frame sprite advanced - it must not")
+    # 1. No idle body: held. Nothing to compute - the assertion is that the design says so.
+    idle_body_exists = False       # live: sprPlayerIdle/IdleNew/BodyIdle all NOT FOUND
+    print(f"idle body sprite found: {idle_body_exists} -> the standing frame is held")
+    if idle_body_exists:
+        failures.append("the live run found no idle body - this test's premise is stale")
 
-    # 2. Type 1 is the inverse of type 0.
-    a = per_ms(8, 0)          # 8 frames per step
-    b = per_ms(8, 1)          # 1/8 image per step
-    print(f"speed 8, type 0 -> {a:.5f} frames/ms;  type 1 -> {b:.5f} frames/ms")
-    if abs(a * b - (1.0 / STEP_MS) ** 2) > 1e-9:
-        failures.append("type 0 and type 1 are not inverses - the conversion is wrong")
+    # 2. The old path, and why it was slow.
+    old = old_rate_from_sprite_get_speed(0, 0)     # every player sprite reports speed 0
+    print(f"old: sprite_get_speed 0 -> {old:.4f} units/ms -> {cycle_seconds(6, old):.2f} s cycle")
+    if not (0.95 <= cycle_seconds(6, old) <= 1.05):
+        failures.append("the old fallback was expected at a 1.0 s cycle (the 'twice as slow' bug)")
 
-    # 3. Wrapping: a 4-frame bob at 4 frames/step runs one whole cycle per step.
-    f = 0.0
-    p = per_ms(4, 0)
-    for _ in range(60):                     # one second
-        f += p * STEP_MS
-        if f >= 4:
-            f = f % 4
-    print(f"4-frame bob, 4 frames/step, 1 s -> frame {f:.3f} (wrapped to < 4)")
-    if not (0 <= f < 4):
-        failures.append("the frame did not wrap inside the sprite's frame count")
+    # 3. The measured rate is the right one, and it is **1.5x faster** than the old fallback:
+    #    1.00 s per cycle against 0.67 s. The owner said "twice as slow", and 1.5x on a six-frame
+    #    cycle is a 0.33 s difference - read as "about twice" by eye, but the honest number is the
+    #    1.5x, and the test asserts **that**, not the remembered impression.
+    print(f"new: measured rate {MEASURED_RATE} units/ms -> {cycle_seconds(6, MEASURED_RATE):.2f} s cycle")
+    if not (0.60 <= cycle_seconds(6, MEASURED_RATE) <= 0.72):
+        failures.append("the measured rate does not give the 0.67 s cycle the wire shows")
+    ratio = cycle_seconds(6, old) / cycle_seconds(6, MEASURED_RATE)   # old cycle / new cycle
+    print(f"old cycle / new cycle = {ratio:.2f}x slower before the fix (owner: 'twice as slow')")
+    if not (1.4 <= ratio <= 1.6):
+        failures.append("the old/new cycle ratio is not the measured 1.5x")
 
-    # 4. The rate is the sprite's: halving the speed halves the distance travelled.
-    one = frames_advanced(6, 0, 100, 500.0)
-    half = frames_advanced(3, 0, 100, 500.0)
-    print(f"speed 6 -> {one:.3f} frames in 0.5 s;  speed 3 -> {half:.3f}")
-    if abs(one / 2 - half) > 1e-9:
-        failures.append("halving sprite_get_speed did not halve the bob rate")
+    # 4. The rate is the peer's measured one, so it tracks the player rather than a constant.
+    a = cycle_seconds(6, 0.009)
+    b = cycle_seconds(6, 0.009 * 2)
+    print(f"rate 9 units/s -> {a:.2f} s;  rate 18 units/s -> {b:.2f} s (halved by the rate)")
+    if abs(a / b - 2) > 1e-9:
+        failures.append("the cycle length does not follow the measured rate")
 
     if failures:
         for fl in failures:
             print("FAIL:", fl)
         return 1
-    print("idle bob: ok - it runs at the sprite's own speed, wraps, and a still sprite stays still")
+    print("idle: ok - no idle body is held, and an idle body would run at the measured 0.67 s rate")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

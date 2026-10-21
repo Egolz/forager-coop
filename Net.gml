@@ -284,8 +284,8 @@ if (!global.coopBodyTried) {
 }
 
 #define CoopResolveIdleSprite()
-// -> the asset index of the player's **idle** sprite (the standing-still bob), or -1, cached in
-// `global.coopIdleSprite`.
+// -> the asset index of the sprite to draw for a **standing** peer, or -1, cached in
+// `global.coopIdleSprite`. `-2` means "there is no separate idle body: use the walk sprite, held".
 //
 // **This is the owner's request in M5k:** "the head and backpack bob while standing still - find
 // that animation and pick up its speed." The Forager modding docs say the player is drawn as four
@@ -294,22 +294,43 @@ if (!global.coopBodyTried) {
 //
 //     CosmeticCreate(undefined, "beet", CosmeticType.Body, sprBeetIdle, sprBeetWalk, ...)
 //
-// so **the bob is each layer's `Idle` sprite**, and an `Idle` sprite is an animation, not a still.
+// **The live ids say what those layers actually are, and the first version of this resolver read
+// them wrong.** The run of 2026-10-22 returned, in order:
 //
-// **`sprPlayerIdle` does not resolve in this build** (live, 2026-10-22: `sprite 'sprPlayerIdle' ->
-// NOT FOUND`), even though that string is in `data.win`. That is the trap the body resolver fell
-// into: the raw byte scan lists *strings*, and a sprite's name can be present in the table while
-// the asset is not addressable by it. `sprPlayerWalk` **does** resolve (id 1), so the idle pair of
-// the same base is the natural candidate - and the cosmetic variants (`sprPlayerGlassesIdle`,
-// `sprPlayerPinkBowIdle`) are real assets whose names the game itself can be asked about.
+//     sprPlayerWalk          id 1    <- the FULL BODY, walking
+//     sprPlayerGlassesIdle   id 2    <- an OVERLAY: glasses only
+//     sprPlayerGlassesWalk   id 3
+//     sprPlayerPinkBowIdle   id 4    <- an OVERLAY: a bow only
+//     sprPlayerPinkBowWalk   id 5
+//     sprBackpackIdle       id 439   <- an OVERLAY: a backpack only
+//     sprPlayerIdle         NOT FOUND
+//     sprPlayerIdleNew      NOT FOUND
+//     sprBodyIdle           NOT FOUND
 //
-// The order below is "most likely to be the plain body idle" first, and every name is asked of the
-// game rather than assumed; if none resolves, the idle falls back to the body sprite, which is
-// what it was before.
+// The resolver walked that list in order and stopped at the first hit, which was
+// `sprPlayerGlassesIdle` - and the owner saw exactly that: **"when I stand still I only see the
+// glasses, the name, and the tree the mock holds; when I walk the mock is visible and without
+// glasses."** So these `...Idle` names are **overlays, not bodies**: drawing one as the body draws
+// the accessory with no body under it.
+//
+// **The ids are sequential from 1, which is the clue that settles `sprPlayerIdle`.** `sprPlayerWalk`
+// is **1**, so a plain `sprPlayerIdle` sitting next to it would be id **0** - and
+// `asset_get_index("sprPlayerIdle")` returns **0** both for "asset number 0" and for "no such
+// name". The two answers are indistinguishable through that call, which is why every check in this
+// file is `> 0` and why id 0 was never examined. A sprite at id 0 cannot be drawn anyway -
+// `draw_sprite_ext(0, ...)` is GameMaker's "no sprite" - so even if it is the idle body, the game
+// cannot be drawing it through the ordinary path.
+//
+// **So the honest conclusion is that there is no separate idle *body*, and the standing pose is the
+// walk sprite held on its standing frame.** The bob the owner sees on their own model lives in the
+// **overlay** layers (`sprBackpackIdle`, and the head cosmetic), not in the body - which is why the
+// request names the head and the backpack and not the legs. `-2` is returned for that case, and the
+// draw handler holds the walk sprite still rather than animating a body that has no idle animation.
 if (!global.coopIdleTried) {
     global.coopIdleTried = true;
-    var _ic = ["sprPlayerIdle", "sprPlayerIdleNew", "sprBodyIdle",
-               "sprPlayerGlassesIdle", "sprPlayerPinkBowIdle"];
+    // Only a **body** name counts. The overlay names are deliberately **not** in this list any
+    // more: they are what produced "only the glasses".
+    var _ic = ["sprPlayerIdle", "sprPlayerIdleNew", "sprBodyIdle"];
     for (var _ii = 0; _ii < array_length(_ic); _ii++) {
         var _iv = asset_get_index(_ic[_ii]);
         if (_iv > 0) {
@@ -317,7 +338,9 @@ if (!global.coopIdleTried) {
             break;
         }
     }
+    if (global.coopIdleSprite <= 0) global.coopIdleSprite = -2;   // no idle body: hold the walk
 }
+if (global.coopIdleSprite == -2) return -1;   // "draw the walk sprite, held" - see the caller
 if (global.coopIdleSprite > 0) return global.coopIdleSprite;
 return -1;
 
@@ -507,11 +530,20 @@ if (global.coopPeerAlive) {
         var _ip_di = _ip_idx - global.coopIdxProbeIdx;
         if (_ip_di < 0) _ip_di += 600;          // the cycle is six units = 600 hundredths
         var _ip_rate = _ip_di > 0.001 ? (_ip_px / (_ip_di / 100)) : -1;
+        // **The animation's own speed** is printed with the index, because that is what "match its
+        // speed" actually needs and it cannot be derived from a sprite with `speed 0`: every player
+        // sprite reports `sprite_get_speed -> 0`, and in GameMaker `0` means "use the room's
+        // default", not "not animated". So the game must be setting the instance's `image_speed`
+        // itself, and this prints it. `objPlayer.image_index` climbs **+0.45 per packet at 20 Hz =
+        // 9 units/s**, i.e. a six-frame cycle in **0.67 s** - and that rise rate *is* the animation
+        // rate, so the probe carries both and the second must agree with the first.
         var _ip_line = "idx probe: idx " + string(floor(_ip_idx))
                      + " d " + string(floor(_ip_di))
                      + " px " + string(floor(_ip_px))
                      + " rate " + string(floor(_ip_rate * 100) / 100) + " px/unit"
-                     + " moved " + string(global.coopLastMoved ? 1 : 0);
+                     + " moved " + string(global.coopLastMoved ? 1 : 0)
+                     + " imgspd " + string(objPlayer.image_speed)
+                     + " imgidx " + string(floor(objPlayer.image_index * 100) / 100);
         Trace(_ip_line);
         CoopSendDebugLine(_ip_line);
         global.coopIdxProbeIdx = _ip_idx;
@@ -1913,13 +1945,32 @@ for (var _pe_i = 0; _pe_i < array_length(_pe_names); _pe_i++) {
 var _pe_sprs = ["sprPlayerIdle", "sprPlayerWalk", "sprPlayerGlassesIdle",
                 "sprPlayerGlassesWalk", "sprPlayerPinkBowIdle", "sprPlayerPinkBowWalk",
                 "sprBodyIdle", "sprPlayerIdleNew", "sprBackpackIdle"];
+
+// **What is sprite id 0?** This is the question the last run raised and it is not a formality
+// (2026-10-22): the owner stands still and sees **only the glasses, the name, and the tree** - no
+// body - while walking shows a whole body without glasses. The ids the probe returned are
+// sequential - `sprPlayerWalk` **1**, `sprPlayerGlassesIdle` **2**, `sprPlayerGlassesWalk` 3,
+// `sprPlayerPinkBowIdle` 4, `sprPlayerPinkBowWalk` 5 - so **`sprPlayerIdle` would be id 0**, and
+// `asset_get_index` answers an unknown name with **0** as well. The two are indistinguishable
+// through that call, which is why the check is `> 0` everywhere and why id 0 was never looked at.
+//
+// `sprite_get_name(0)` says what id 0 really is, and `object_get_sprite(objPlayer)` says what the
+// game itself draws the player with - the two together decide whether the plain body idle exists
+// and is simply unreachable by name.
+array_push(_pe_lines, "sprite id 0 is '" + sprite_get_name(0) + "'");
+array_push(_pe_lines, "sprite id 1 is '" + sprite_get_name(1) + "'");
+if (instance_exists(objPlayer)) {
+    array_push(_pe_lines, "objPlayer sprite_index -> " + string(objPlayer.sprite_index)
+               + " imgspd " + string(objPlayer.image_speed));
+}
 for (var _pe_s = 0; _pe_s < array_length(_pe_sprs); _pe_s++) {
     var _pe_sn = _pe_sprs[_pe_s];
     var _pe_si = asset_get_index(_pe_sn);
     if (_pe_si > 0) {
         // `sprite_get_speed` is frames-per-image (type 0) or images-per-frame (type 1) - the two
         // are inverses, and `sprite_get_speed_type` says which. Both are printed, so the rate is
-        // read rather than assumed.
+        // read rather than assumed. Every player sprite reported **0**, which in GameMaker means
+        // "use the room's default", not "not animated" - see the idle clock in the draw handler.
         array_push(_pe_lines, "sprite '" + _pe_sn + "' -> " + string(_pe_si)
                    + " has " + string(sprite_get_number(_pe_si)) + " frame(s)"
                    + " h " + string(sprite_get_height(_pe_si))

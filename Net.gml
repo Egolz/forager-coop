@@ -880,11 +880,25 @@ return -floor(_y);
 if (global.coopSolidObj == -2) {
     // The concrete families, not their common ancestor - see the note above. Every name
     // that does not exist in this build resolves to -1 and drops out.
+    //
+    // **Two lists, because not everything that stands in the world is in the way.** The
+    // pickable plants - `parHerb`, which is the family of the berry bush, the flower and
+    // the cotton - have **no hitbox**: the player walks straight through them, so a peer
+    // must walk through them too. The owner noticed the mock stepping around a bush
+    // instead of through it (live, 2026-10-22).
+    //
+    // So the list that blocks a **peer** is the one without the herbs, and the list that
+    // blocks a **building** is the full one: a structure may not be dropped on a bush
+    // either, because the game refuses that itself.
     global.coopSolidObjs = [];
+    global.coopHardObjs = [];
     var _sld_fams = ["parNatural", "parHerb", "parStructure", "objRock", "objTree"];
     for (var _sld_fi = 0; _sld_fi < array_length(_sld_fams); _sld_fi += 1) {
         var _sld_fo = asset_get_index(array_get(_sld_fams, _sld_fi));
-        if (_sld_fo >= 0) array_push(global.coopSolidObjs, _sld_fo);
+        if (_sld_fo >= 0) {
+            array_push(global.coopSolidObjs, _sld_fo);
+            if (_sld_fams[_sld_fi] != "parHerb") array_push(global.coopHardObjs, _sld_fo);
+        }
     }
     global.coopSolidObj = 0;   // marker: resolved (0 is never a valid object index)
 }
@@ -954,8 +968,14 @@ var _sic_cell_x = floor(_x / 16);
 var _sic_cell_y = floor(_y / 16);
 var _sic_hits = 0;
 if (global.coopSolidObj == -2) CoopSolidNear(0, 0);   // resolve the family lists once
-for (var _sic_si = 0; _sic_si < array_length(global.coopSolidObjs); _sic_si += 1) {
-    var _sic_sobj = global.coopSolidObjs[_sic_si];
+// **The list depends on the question.** `_living` 0 means "a **peer** may stand here":
+// living things do not stand in a peer's way, and neither do the pickable plants, which
+// have no hitbox - the player walks through them. `_living` 1 means "a **building** goes
+// here": then the living things and the herbs block it, because the player must not be
+// built on and the game refuses a building on a bush itself.
+var _sic_list = (_living != 0) ? global.coopSolidObjs : global.coopHardObjs;
+for (var _sic_si = 0; _sic_si < array_length(_sic_list); _sic_si += 1) {
+    var _sic_sobj = _sic_list[_sic_si];
     var _sic_n = instance_number(_sic_sobj);
     for (var _sic_i = 0; _sic_i < _sic_n; _sic_i += 1) {
         var _sic_inst = instance_find(_sic_sobj, _sic_i);

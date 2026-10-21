@@ -138,16 +138,22 @@ if (_spr > 0) {
 //
 // The game's own dust is a real object (`objDust`), spawned by the player's own movement -
 // a puppet is a drawing and cannot make the game spawn anything, so this is the mod's
-// own puff instead: the same sprite (`sprDust`), drawn at the feet once per step of the
+// own puff instead: the same sprite (`sprDust`), drawn at the feet on every step of the
 // walk cycle. It is an imitation, not the game's effect, and it is fainter than the real
 // one so it reads as dust and not as a bug.
+//
+// **Once per frame of the cycle, not once per cycle.** The first version drew it when the
+// cycle started, which is about two puffs a second - too few to see (the owner saw none at
+// all, live, 2026-10-22). The cycle runs about ten frames a second, so that is a puff
+// every tenth of a second, which is what a walking player's dust looks like.
 if (_walking) {
     if (global.coopDustSprite <= 0) {
         global.coopDustSprite = asset_get_index("sprDust");
     }
-    if (global.coopDustSprite > 0 && _frame == 0) {
+    if (global.coopDustSprite > 0 && _frame != global.coopDustLastFrame) {
+        global.coopDustLastFrame = _frame;
         draw_sprite_ext(global.coopDustSprite, 0, _x - _face * 5, _yd, 1, 1, 0,
-                        c_white, 0.35);
+                        c_white, 0.5);
     }
 }
 

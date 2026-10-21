@@ -44,7 +44,7 @@ enum CoopCmd {
     SNAP_STRUCT      = 18   // host -> client: a chunk of the world's structures
 }
 
-global.coopVersion  = "0.0.62-m4b";
+global.coopVersion  = "0.0.63-m4c";
 global.coopProtocol = 7;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -102,6 +102,8 @@ global.coopSolidObj    = -2;   // -2 = not resolved yet (kept as the "have we lo
 global.coopSolidObjs   = [];   // the concrete object families that block a build cell: see
                                // CoopSolidNear - `instance_number(parSolid)` is 0 in this
                                // build, so the leaf families are listed instead
+global.coopHardObjs    = [];   // the same list without the pickable plants, which have no
+                               // hitbox: a peer walks through a bush, as the player does
 global.coopLivingObjs  = [];   // player/NPC/enemy/pet object indices, resolved lazily
 
 global.coopIsHost    = false;  // we own the listening server
@@ -162,6 +164,7 @@ global.coopAnimTick = 0;
 global.coopAnimStep = 6;      // the game advances a walk frame about every 6th frame
 global.coopAnimWalking = false;
 global.coopDustSprite = -1;
+global.coopDustLastFrame = -1;
 // The last position we sent, to tell "walking" from "standing still": the player's
 // sprite is idle or walk, and the instance does not carry it (the body is drawn from a
 // constant asset), so the movement is what says which.

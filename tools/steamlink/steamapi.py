@@ -35,6 +35,7 @@ import ctypes
 import os
 import struct
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -52,15 +53,32 @@ IDENT_SIZE = 160
 # -- the message struct ------------------------------------------------------
 # struct SteamNetworkingMessage_t { void *m_pData; int32 cbSize; SteamNetworkingIdentity_t
 # m_identity; ... };
+#
+# The identity's offset is **16 in both bitnesses**, not 8 or 12: the identity starts with a
+# uint64, so it is 8-byte aligned, and it lands after the pointer, the size and the padding
+# that keeps it aligned. The size's offset *does* differ - it is 4 on 32-bit and 8 on 64-bit,
+# because the pointer is 8 bytes wide there.
+#
+# These are the hub playbook's numbers (playbook/networking-steam-spacewar.md), and they were
+# worth checking against the code rather than deriving: the first draft of this file had the
+# identity at 12 on 64-bit, which would have decoded every sender as SteamID 0.
 IS_64 = struct.calcsize("P") == 8
 MSG_DATA_OFF = 0
 MSG_SIZE_OFF = 8 if IS_64 else 4
-MSG_IDENT_OFF = 12 if IS_64 else 16
+MSG_IDENT_OFF = 16
+MSG_IDENT_FALLBACK_OFF = 12   # tried when the identity at 16 decodes as SteamID 0
 
 # -- the lobby callback structs ----------------------------------------------
 # LobbyCreated { int32 result; u64 lobby; } and
 # LobbyEnter  { u64 lobby; u64 user_changed; u64 making_change; uint32 state; }
-LOBBY_CREATED_LOBBY_OFF = 4
+#
+# **The lobby id's offset depends on the bitness.** `LobbyCreated` holds a uint64 after an
+# int32, and a uint64 is 8-byte aligned, so on 64-bit the id sits at offset **8**, not 4 -
+# there are four bytes of padding in between. The reference implementation is 32-bit, where
+# the id is at 4, and reading it at 4 on 64-bit yields a number that looks like a lobby id and
+# is not one: every later call with it fails.
+LOBBY_CREATED_RESULT_OFF = 0
+LOBBY_CREATED_LOBBY_OFF = 8 if IS_64 else 4
 LOBBY_ENTER_LOBBY_OFF = 0
 
 # -- send flags --------------------------------------------------------------
@@ -70,6 +88,26 @@ SEND_RELIABLE = 8
 LOBBY_TYPE_FRIENDS_ONLY = 1
 
 LOBBY_DATA_KEY = "coop"      # the lobby key the host sets for the joiner to look for
+
+
+class CallbackMsg(ctypes.Structure):
+    """`struct CallbackMsg { int32 user; int32 callback; uint8 *param; int32 param_size; }`.
+
+    Defined once at module level, because the argument type has to be the *same* class the
+    call is made with: ctypes refuses a `byref` where a `POINTER(T)` is declared, and it
+    refuses an instance where a pointer is declared. One class, one pointer.
+    """
+    _fields_ = [("user", ctypes.c_int32),
+                ("callback", ctypes.c_int32),
+                ("param", ctypes.POINTER(ctypes.c_uint8)),
+                ("param_size", ctypes.c_int32)]
+
+
+class APICallCompleted(ctypes.Structure):
+    """`struct APICallCompleted { uint64 call; int32 callback; uint32 param_size; }`."""
+    _fields_ = [("call", ctypes.c_uint64),
+                ("callback", ctypes.c_int32),
+                ("param_size", ctypes.c_uint32)]
 
 
 @dataclass
@@ -88,7 +126,13 @@ class ReceivedMessage:
 
 
 def lobby_created_lobby(param: bytes) -> int:
-    return int.from_bytes(param[LOBBY_CREATED_LOBBY_OFF:LOBBY_CREATED_LOBBY_OFF + 8], "little")
+    return int.from_bytes(param[LOBBY_CREATED_LOBBY_OFF:
+                               LOBBY_CREATED_LOBBY_OFF + 8], "little")
+
+
+def lobby_created_result(param: bytes) -> int:
+    return int.from_bytes(param[LOBBY_CREATED_RESULT_OFF:
+                               LOBBY_CREATED_RESULT_OFF + 4], "little", signed=True)
 
 
 def lobby_entered_lobby(param: bytes) -> int:
@@ -168,13 +212,7 @@ class CtypesSteamApi:
         f["RunFrame"].restype = None
         f["RunFrame"].argtypes = [ctypes.c_int32]
 
-        # struct CallbackMsg { int32 user; int32 callback; uint8 *param; int32 param_size; }
-        class CallbackMsg(ctypes.Structure):
-            _fields_ = [("user", ctypes.c_int32),
-                        ("callback", ctypes.c_int32),
-                        ("param", ctypes.POINTER(ctypes.c_uint8)),
-                        ("param_size", ctypes.c_int32)]
-
+        # The same CallbackMsg class the call is made with - one class, one pointer type.
         f["GetNextCallback"] = d.SteamAPI_ManualDispatch_GetNextCallback
         f["GetNextCallback"].restype = ctypes.c_bool
         f["GetNextCallback"].argtypes = [ctypes.c_int32, ctypes.POINTER(CallbackMsg)]
@@ -182,6 +220,17 @@ class CtypesSteamApi:
         f["FreeLastCallback"] = d.SteamAPI_ManualDispatch_FreeLastCallback
         f["FreeLastCallback"].restype = None
         f["FreeLastCallback"].argtypes = [ctypes.c_int32]
+
+        # **This is how a call's result is actually obtained.** The flat API delivers a
+        # CB_CALL_COMPLETED callback whose parameter is an APICallCompleted struct; the
+        # result itself has to be fetched with GetAPICallResult, which also says whether the
+        # call failed. A lobby id, for instance, is *not* in the callback parameter - reading
+        # it from there gives a number that looks right and is not a lobby.
+        f["GetAPICallResult"] = d.SteamAPI_ManualDispatch_GetAPICallResult
+        f["GetAPICallResult"].restype = ctypes.c_bool
+        f["GetAPICallResult"].argtypes = [ctypes.c_int32, ctypes.c_uint64, ctypes.c_void_p,
+                                          ctypes.c_int, ctypes.c_int,
+                                          ctypes.POINTER(ctypes.c_bool)]
 
         f["User"] = d.SteamAPI_SteamUser_v023
         f["User"].restype = ctypes.c_void_p
@@ -227,6 +276,12 @@ class CtypesSteamApi:
         f["GetLobbyData"] = d.SteamAPI_ISteamMatchmaking_GetLobbyData
         f["GetLobbyData"].restype = ctypes.c_char_p
         f["GetLobbyData"].argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_char_p]
+
+        # The lobby's data lives on Valve's servers, so a reader has to ask for it first;
+        # `GetLobbyData` alone can answer with an empty string.
+        f["RequestLobbyData"] = d.SteamAPI_ISteamMatchmaking_RequestLobbyData
+        f["RequestLobbyData"].restype = ctypes.c_bool
+        f["RequestLobbyData"].argtypes = [ctypes.c_void_p, ctypes.c_uint64]
 
         f["GetLobbyOwner"] = d.SteamAPI_ISteamMatchmaking_GetLobbyOwner
         f["GetLobbyOwner"].restype = ctypes.c_uint64
@@ -299,23 +354,54 @@ class CtypesSteamApi:
         return int(self._fn["GetSteamID"](self._user))
 
     def poll_callbacks(self) -> list[Callback]:
-        """Run one frame and collect the callbacks it produced."""
+        """Run one frame and collect the callbacks it produced.
+
+        A call's result does not arrive in the callback parameter - the parameter of
+        CB_CALL_COMPLETED is an `APICallCompleted` struct, and the result has to be fetched
+        with `GetAPICallResult`. So a completed call is **re-dispatched** under the inner
+        callback id (513 for "lobby created"), carrying the result buffer.
+
+        **The result is not always ready when the callback arrives.** The first
+        `GetAPICallResult` for a fresh call can answer "not yet" - Steam is still fetching
+        the app's config - and the reference implementation, which asks once and drops the
+        result, loses the lobby id that way. So a call that is not ready is **kept and asked
+        again** on the following frames, and only dropped when it has been pending too long.
+        """
         f = self._fn
         f["RunFrame"](self._pipe)
         out: list[Callback] = []
 
-        class CallbackMsg(ctypes.Structure):
-            _fields_ = [("user", ctypes.c_int32),
-                        ("callback", ctypes.c_int32),
-                        ("param", ctypes.POINTER(ctypes.c_uint8)),
-                        ("param_size", ctypes.c_int32)]
+        # A call that finished but whose result is not readable yet.
+        if not hasattr(self, "_pending"):
+            self._pending: dict[int, tuple[int, int, float]] = {}
+
+        # Retry the calls that are waiting for their result.
+        for call in list(self._pending):
+            inner, psize, since = self._pending[call]
+            buf = ctypes.create_string_buffer(psize + 16)
+            failed = ctypes.c_bool(True)
+            ok = f["GetAPICallResult"](self._pipe, call, buf, psize, inner,
+                                       ctypes.byref(failed))
+            if ok and not failed.value:
+                out.append(Callback(inner, buf.raw[:psize]))
+                del self._pending[call]
+            elif time.time() - since > 20.0:
+                del self._pending[call]
 
         msg = CallbackMsg()
-        while f["GetNextCallback"](self._pipe, ctypes.byref(msg)):
-            param = b""
-            if msg.param and msg.param_size > 0:
-                param = ctypes.string_at(msg.param, msg.param_size)
-            out.append(Callback(msg.callback, param))
+        # The argument is declared as POINTER(CallbackMsg), so ctypes wants a **pointer
+        # instance**; `ctypes.pointer` is what produces one. (Passing the struct itself, or
+        # a byref of it, is the "expected LP_CallbackMsg instance instead of ..." error.)
+        while f["GetNextCallback"](self._pipe, ctypes.pointer(msg)):
+            if msg.callback == CB_CALL_COMPLETED and msg.param and msg.param_size >= 16:
+                done = APICallCompleted.from_buffer_copy(
+                    ctypes.string_at(msg.param, msg.param_size))
+                self._pending[done.call] = (done.callback, done.param_size, time.time())
+            else:
+                param = b""
+                if msg.param and msg.param_size > 0:
+                    param = ctypes.string_at(msg.param, msg.param_size)
+                out.append(Callback(msg.callback, param))
             f["FreeLastCallback"](self._pipe)
         return out
 
@@ -338,9 +424,13 @@ class CtypesSteamApi:
         ptr = self._fn["GetLobbyData"](self._mm, lobby_id, key.encode("utf-8"))
         return ptr.decode("utf-8", errors="replace") if ptr else ""
 
-    def set_lobby_data(self, lobby_id: int, key: str, value: str) -> None:
-        self._fn["SetLobbyData"](self._mm, lobby_id, key.encode("utf-8"),
-                                 value.encode("utf-8"))
+    def request_lobby_data(self, lobby_id: int) -> bool:
+        """Ask for the lobby's data. Without this a read can answer with an empty string."""
+        return bool(self._fn["RequestLobbyData"](self._mm, lobby_id))
+
+    def set_lobby_data(self, lobby_id: int, key: str, value: str) -> bool:
+        return bool(self._fn["SetLobbyData"](self._mm, lobby_id, key.encode("utf-8"),
+                                              value.encode("utf-8")))
 
     def send_to_user(self, steam_id: int, data: bytes, reliable: bool,
                      channel: int) -> bool:
@@ -366,6 +456,11 @@ class CtypesSteamApi:
             data = ctypes.string_at(data_ptr, size) if data_ptr and size > 0 else b""
             sender = int(self._fn["IdentGet"](
                 ctypes.cast(msg_ptr + MSG_IDENT_OFF, ctypes.c_void_p)))
+            if sender == 0:
+                # The identity did not decode at its documented offset; the reference
+                # implementation falls back to 12 for the same reason.
+                sender = int(self._fn["IdentGet"](
+                    ctypes.cast(msg_ptr + MSG_IDENT_FALLBACK_OFF, ctypes.c_void_p)))
             out.append(ReceivedMessage(sender, data, channel))
             self._fn["MessageRelease"](msg_ptr)
         return out
@@ -386,6 +481,16 @@ class CtypesSteamApi:
         return int(self._fn["IdentGet"](buf))
 
     def lobby_created(self, callback: Callback) -> int:
+        """The lobby id, or 0 when the call reported a failure.
+
+        The `result` field is checked because the reference implementation checks it too, and
+        because a failed call still carries a buffer - reading the id out of it gives a number
+        that looks like a lobby and is not one, and every later call with it fails.
+        """
+        if len(callback.param) < LOBBY_CREATED_LOBBY_OFF + 8:
+            return 0
+        if lobby_created_result(callback.param) != 1:
+            return 0
         return lobby_created_lobby(callback.param)
 
     def lobby_entered(self, callback: Callback) -> int:

@@ -54,27 +54,48 @@ python relay.py join  --port 6511 --lobby-id <the number the host printed>
 
 The host prints a lobby id; the joiner needs it. Both need Steam running and logged in.
 
-## The offline test
+## The library
+
+`steam_api64.dll` (64-bit, for a 64-bit Python) or `steam_api.dll` (32-bit) has to sit next
+to the script, together with `steam_appid.txt` containing `480`. The relay writes the app id
+itself if it is missing.
+
+Get it from the **standalone release of Steamworks.NET** -
+[github.com/rlabrecque/Steamworks.NET/releases](https://github.com/rlabrecque/Steamworks.NET/releases),
+release `2025.164.1`, file `Steamworks.NET-Standalone_2025.164.1.zip`. The hub's playbook
+(`playbook/networking-steam-spacewar.md`) pins the SHA-256 of both files, and they were
+checked against it:
+
+| file | SHA-256 |
+|---|---|
+| `Windows-x64/steam_api64.dll` | `eb17909a76668cf9ae0b92a618a34a50f6c73d3a6787cb4dd8ce36a8b10bfb75` |
+| `Windows-x86/steam_api.dll` | `fdafb7c65ec7d4182b42bf92cc8671c68e4dc547cc6e613899d2618a47eb65da` |
+
+The library is **not** committed here - it is Valve's, not ours to redistribute.
+
+## The tests
 
 ```
-python test_relay.py
+python test_relay.py       # the relay's logic, offline, against the mock
+python test_steam_api.py   # the binding, against the real library
 ```
 
-It starts a fake game server, two relays and a mock Steam, and checks that the bytes that go
-in one end come out the other, in order. It also runs with 30% of the **unreliable** messages
-dropped, because that is the case the reference implementation does not have to handle.
+`test_relay.py` starts a fake game server, two relays and a mock Steam, and checks that the
+bytes that go in one end come out the other, in order. It also runs with 30% of the
+**unreliable** messages dropped, because that is the case the reference implementation does not
+have to handle.
+
+`test_steam_api.py` needs Steam running and logged in. It checks the library loads, the flat
+API initialises, a lobby is created, lobby data survives a round trip, and **a message sent to
+our own SteamID comes back** - a loopback, so the whole messaging path is exercised over
+Steam's real network without a second account.
 
 ## What still needs doing
 
-- **The real library.** `steam_api64.dll` (64-bit, the flat API) and `steam_appid.txt` = 480
-  have to sit next to the script. The standalone release of Steamworks.NET is the source; the
-  hub's playbook (`playbook/networking-steam-spacewar.md`) pins the SHA-256 of the exact
-  build. It has not been downloaded yet, so the ctypes binding is **unverified against the
-  real library** - the offline test covers the relay's logic, not the binding.
+- **A second account.** The relay has only been run against the mock and a loopback; a real
+  session between two people is the test that matters.
 - **Joining by friend.** The reference also finds the host through the friends list and rich
   presence, so the joiner does not have to be told a number. The lobby id is the first cut.
-- **A second account.** The relay has only been run against the mock, because a real test
-  needs two Steam accounts.
 
 ## Credits
 

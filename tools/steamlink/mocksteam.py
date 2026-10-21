@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import itertools
 import queue
+import struct
 import random
 import threading
 from dataclasses import dataclass, field
@@ -88,7 +89,14 @@ def lobby_entered_member(param: bytes) -> int:
 
 
 def _lobby_created_param(lobby_id: int) -> bytes:
-    return (1).to_bytes(4, "little") + lobby_id.to_bytes(8, "little") + b"\x00" * 4
+    """`LobbyCreated { int32 result; u64 lobby; }` - with the uint64 aligned, so the id is
+    at offset 8 on 64-bit and at 4 on 32-bit. The mock has to use the same layout as the
+    real API, or the two would not be interchangeable."""
+    from steamapi import IS_64
+    head = (1).to_bytes(4, "little")
+    if IS_64:
+        head += b"\x00" * 4
+    return head + lobby_id.to_bytes(8, "little") + b"\x00" * 4
 
 
 def _lobby_enter_param(lobby_id: int, member: int) -> bytes:
@@ -333,6 +341,12 @@ class MockPeer:
         return ident_sid(callback.param)
 
     def lobby_created(self, callback: Callback) -> int:
+        """The lobby id, or 0 when the call reported a failure - as the real API does."""
+        from steamapi import lobby_created_lobby, lobby_created_result
+        if len(callback.param) < 12:
+            return 0
+        if lobby_created_result(callback.param) != 1:
+            return 0
         return lobby_created_lobby(callback.param)
 
     def lobby_entered(self, callback: Callback) -> int:

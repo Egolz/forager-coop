@@ -3,3 +3,10 @@
 Thumbs.db
 .DS_Store
 __pycache__/
+
+# The Steamworks library is not ours to redistribute. The relay needs
+# steam_api64.dll (64-bit) or steam_api.dll (32-bit) next to it, plus
+# steam_appid.txt = 480 - see tools/steamlink/README.md for where to get them and the
+# SHA-256 they must have.
+steam_api*.dll
+steam_appid.txt

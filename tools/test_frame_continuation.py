@@ -1,8 +1,8 @@
-"""Is the puppet's walk driven by movement, or by a timer that never stops?
+"""Is the puppet's animation driven by movement, or by a timer that never stops?
 
-**This is the M5j test, and it is a rewrite.** An earlier version of this file tested continuing the
-peer's `image_index` between packets. The `idx probe` line that fed it came back and said the index
-is **not the walk at all**:
+**This is the M5j/M5k test.** An earlier version of this file tested continuing the peer's
+`image_index` between packets. The `idx probe` line that fed it came back and said the index is
+**not the walk at all**:
 
     idx 120 d 0   px 15   moved 0    <- the player stood still, the index did not move
     idx 105 d 585 px 76   moved 0    <- then ran a whole cycle while the player walked 76 px
@@ -10,13 +10,16 @@ is **not the walk at all**:
     pos 681 frame 4.35 -> ...                   <- +0.45 for 2 px
 
 The frame advances **+0.45 per packet whatever the distance**, so drawing it makes the puppet walk
-in place - the owner's report. So the two things to check now are:
+in place - the owner's report.
 
-  1. **Standing still must freeze the frame.** The old code (draw the index) keeps animating; the
-     new code (drive from movement, gated on the peer's `walk` flag) holds the frame. This is the
-     complaint itself, written as assertions.
-  2. **Walking must not run ahead of the peer.** The cycle is six frames at 12.2 px per unit, so
-     after N pixels the frame must be where those pixels say - not a whole cycle on.
+So the mod now runs **two clocks**, one per state, and this file checks the **walk** clock (the
+**idle** clock is the idle sprite's own `sprite_get_speed`, which an offline test cannot know - it
+is read live by the asset probe):
+
+  1. **Walking** must follow the ground the puppet covers: six frames at 12.2 px per unit.
+  2. **Standing still** must **not** advance the walk frame. (The idle bob is a *different* clock
+     and is allowed - and expected - to move; that is M5k's whole point. What must not happen is the
+     **walk** clock running on while the peer stands.)
 
 The numbers are the live ones: 12.2 px per index-unit, 90 px/s walking, 60 Hz drawing.
 """
@@ -73,14 +76,14 @@ def main() -> int:
     new_moves = sum(1 for a, b in zip(new_after, new_after[1:]) if a != b)
 
     print(f"standing still ({len(old_after)} drawn frames):")
-    print(f"  old way changes the frame {old_moves} time(s)   <- walks in place")
-    print(f"  new way changes the frame {new_moves} time(s)   <- held")
+    print(f"  old way changes the WALK frame {old_moves} time(s)   <- walks in place")
+    print(f"  new way changes the WALK frame {new_moves} time(s)   <- held")
     if old_moves == 0:
         failures.append("the old way was expected to keep animating while standing still "
                         "(that is the bug being fixed) and did not - the premise is wrong")
     if new_moves != 0:
-        failures.append(f"the new way still changes the frame {new_moves} time(s) while the peer "
-                        f"stands still - the puppet would walk in place")
+        failures.append(f"the new way still changes the WALK frame {new_moves} time(s) while the "
+                        f"peer stands still - the puppet would walk in place")
 
     # --- 2. Walking: the frame follows the distance, and does not run ahead. -------------------
     # Both sides are compared **unwrapped**: the frame counter and the distance-derived value are

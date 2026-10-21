@@ -283,6 +283,44 @@ if (!global.coopBodyTried) {
     if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("Player Idle");
 }
 
+#define CoopResolveIdleSprite()
+// -> the asset index of the player's **idle** sprite (the standing-still bob), or -1, cached in
+// `global.coopIdleSprite`.
+//
+// **This is the owner's request in M5k:** "the head and backpack bob while standing still - find
+// that animation and pick up its speed." The Forager modding docs say the player is drawn as four
+// stacked cosmetic layers - **Wing -> Backpacks -> Body -> Head** - and every cosmetic is made with
+// its own pair:
+//
+//     CosmeticCreate(undefined, "beet", CosmeticType.Body, sprBeetIdle, sprBeetWalk, ...)
+//
+// so **the bob is each layer's `Idle` sprite**, and an `Idle` sprite is an animation, not a still.
+//
+// **`sprPlayerIdle` does not resolve in this build** (live, 2026-10-22: `sprite 'sprPlayerIdle' ->
+// NOT FOUND`), even though that string is in `data.win`. That is the trap the body resolver fell
+// into: the raw byte scan lists *strings*, and a sprite's name can be present in the table while
+// the asset is not addressable by it. `sprPlayerWalk` **does** resolve (id 1), so the idle pair of
+// the same base is the natural candidate - and the cosmetic variants (`sprPlayerGlassesIdle`,
+// `sprPlayerPinkBowIdle`) are real assets whose names the game itself can be asked about.
+//
+// The order below is "most likely to be the plain body idle" first, and every name is asked of the
+// game rather than assumed; if none resolves, the idle falls back to the body sprite, which is
+// what it was before.
+if (!global.coopIdleTried) {
+    global.coopIdleTried = true;
+    var _ic = ["sprPlayerIdle", "sprPlayerIdleNew", "sprBodyIdle",
+               "sprPlayerGlassesIdle", "sprPlayerPinkBowIdle"];
+    for (var _ii = 0; _ii < array_length(_ic); _ii++) {
+        var _iv = asset_get_index(_ic[_ii]);
+        if (_iv > 0) {
+            global.coopIdleSprite = _iv;
+            break;
+        }
+    }
+}
+if (global.coopIdleSprite > 0) return global.coopIdleSprite;
+return -1;
+
 #define CoopResolvePeerSprite(_name)
 // -> the asset index of the sprite the peer asked for, or -1.
 //
@@ -300,6 +338,11 @@ if (_name == "walk") {
     if (global.coopWalkSprite > 0) return global.coopWalkSprite;
 }
 if (_name == "idle") {
+    // **The idle is its own sprite** (M5k), not the body: the body sprite ends up being the walk
+    // sprite, and drawing a walk with a standing frame is exactly the "walks in place" the owner
+    // reported. The idle pair is resolved separately - see CoopResolveIdleSprite.
+    CoopResolveIdleSprite();
+    if (global.coopIdleSprite > 0) return global.coopIdleSprite;
     CoopResolveBodySprite();
     if (global.coopBodySprite > 0) return global.coopBodySprite;
 }
@@ -1835,20 +1878,55 @@ for (var _pe_i = 0; _pe_i < array_length(_pe_names); _pe_i++) {
     array_push(_pe_lines, _pe_line);
 }
 
-// **How many frames do the two body sprites have?** The puppet's cycle is drawn over
+// **How many frames do the body sprites have?** The puppet's cycle is drawn over
 // `global.coopStepMax + 1 = 6` frames, and a frame past the end of a sprite draws **nothing** -
-// so if either body sprite has fewer than six, the puppet will vanish for part of every cycle.
-// This is asked rather than assumed for the same reason the dust's frame count was: a wrong
-// count in the high direction draws blank frames, which reads as a stutter or a vanish.
-var _pe_sprs = ["sprPlayerIdle", "sprPlayerWalk"];
+// so a sprite with fewer frames would make the puppet vanish for part of every cycle.
+//
+// **`sprPlayerIdle` did NOT resolve in the live build** (2026-10-22, `sprite 'sprPlayerIdle' ->
+// NOT FOUND`) even though the string is in `data.win` - so the raw byte scan is a list of
+// *strings*, not of *assets*. Five more names are checked here by the game itself, because only
+// the game can say which are real:
+//
+//     sprPlayerIdle   sprPlayerWalk   sprPlayerGlassesIdle   sprPlayerPinkBowIdle
+//     sprBodyIdle     sprPlayerIdleNew
+//
+// and the two cosmetic variants are the interesting ones: the naming scheme is
+// spr<Base><Cosmetic><State>, so the player's **head/outfit idle animation** may live in
+// `sprPlayerGlassesIdle` rather than in a plain `sprPlayerIdle`. The owner's request - a head and
+// backpack bob while standing still - is a question about which of these is the **body idle with
+// its own animation**, and this is how that is asked.
+// **The owner's request is this line's whole reason: "the head and backpack bob while standing
+// still - find that animation and pick up its speed."** The Forager modding docs say the player is
+// drawn as **four stacked cosmetic layers** (Wing -> Backpacks -> Body -> Head), and every cosmetic
+// is made with its own pair - `CosmeticCreate(undefined, "beet", CosmeticType.Body, sprBeetIdle,
+// sprBeetWalk, ...)` - so **the idle bob is each layer's `Idle` sprite**, and the `Idle` sprite is
+// an animation, not a still.
+//
+// So the two things to learn from the game are:
+//
+//   * **which** of the candidate names is the real player idle sprite - `sprPlayerIdle` did NOT
+//     resolve in the live build (2026-10-22), so the raw string scan is a list of *strings*, not
+//     of *assets*, and only the game can say which is which; and
+//   * **how fast** that sprite is meant to play - `sprite_get_speed` / `sprite_get_speed_type`,
+//     which is the game's own number. "Pick up its speed" has to mean the sprite's own speed, not
+//     a constant picked to look right, or the bob will drift from the player's.
+var _pe_sprs = ["sprPlayerIdle", "sprPlayerWalk", "sprPlayerGlassesIdle",
+                "sprPlayerGlassesWalk", "sprPlayerPinkBowIdle", "sprPlayerPinkBowWalk",
+                "sprBodyIdle", "sprPlayerIdleNew", "sprBackpackIdle"];
 for (var _pe_s = 0; _pe_s < array_length(_pe_sprs); _pe_s++) {
     var _pe_sn = _pe_sprs[_pe_s];
     var _pe_si = asset_get_index(_pe_sn);
     if (_pe_si > 0) {
+        // `sprite_get_speed` is frames-per-image (type 0) or images-per-frame (type 1) - the two
+        // are inverses, and `sprite_get_speed_type` says which. Both are printed, so the rate is
+        // read rather than assumed.
         array_push(_pe_lines, "sprite '" + _pe_sn + "' -> " + string(_pe_si)
                    + " has " + string(sprite_get_number(_pe_si)) + " frame(s)"
                    + " h " + string(sprite_get_height(_pe_si))
-                   + " yoff " + string(sprite_get_yoffset(_pe_si)));
+                   + " w " + string(sprite_get_width(_pe_si))
+                   + " yoff " + string(sprite_get_yoffset(_pe_si))
+                   + " speed " + string(sprite_get_speed(_pe_si))
+                   + " speedtype " + string(sprite_get_speed_type(_pe_si)));
     } else {
         array_push(_pe_lines, "sprite '" + _pe_sn + "' -> NOT FOUND");
     }

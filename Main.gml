@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.74-m5j";
+global.coopVersion  = "0.0.75-m5k";
 global.coopProtocol = 9;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -147,6 +147,16 @@ global.coopRemoteInstances = [];
 // a property of the instance. See CoopResolveBodySprite.
 global.coopBodySprite = -1;
 global.coopBodyTried = false;
+// M5k: **the player's idle sprite** - the standing-still bob the owner asked to be matched. The
+// body sprite resolves to the *walk* pair's sibling, and drawing a walk frame for a standing peer
+// is the "walks in place" bug; the idle is a separate asset with its own bob animation (see
+// CoopResolveIdleSprite in Net.gml). `-1` = not resolved yet, `0` = asked and not found.
+global.coopIdleSprite = -1;
+global.coopIdleTried = false;
+// M5k: **the puppet's own idle frame**, fractional so the bob is smooth rather than stepped, and
+// driven at the **sprite's own speed** (`sprite_get_speed`) rather than a constant - "pick up its
+// speed" has to mean the game's own number or the bob drifts from the player's.
+global.coopIdleFrameF = 0;
 // M3.4: the peer's animation. The sprite travels by **name** ("idle" / "walk"), because
 // only a real game can produce an asset index - a peer that is not the game (the mock
 // peer) could not send a walking sprite at all. The names are asset names, not display

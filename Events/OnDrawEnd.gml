@@ -55,26 +55,29 @@ if (objPlayer.room != global.coopPeer.room) exit;
 // **The name is drawn even when there is no sprite.** A peer that cannot be drawn is exactly
 // the situation where the owner needs to see that the peer is there at all, so the label
 // does not depend on the body being drawable.
-// **The body sprite must be the WALK sprite while the peer is walking** (M5j). This was the
-// other half of "the mock uses only the left leg": `CoopResolveBodySprite` resolves
-// `sprPlayerIdle` - the *idle* sprite - as the body, and the puppet was drawn with it whatever
-// the peer's state. Drawing a running frame on an idle sprite shows the same stance with a leg
-// picked by the index, which is what "only one leg moves" looks like.
-//
-// `global.coopPeer.sprite` is already the right sprite - `CoopResolvePeerSprite` returns
-// `sprPlayerWalk` for the `"walk"` name and the body sprite for `"idle"` - but only when it can
-// resolve it, and the mock peer sends `-1` (it has no assets). So when the peer's sprite cannot
-// be resolved, the **walk** sprite is now chosen here for a walking peer instead of the idle one.
 // **Is the peer walking?** The peer's own flag, read once at the top, because three things need
 // it: which sprite to draw (idle vs walk), whether to advance the walk cycle at all, and the dust.
 // It used to be read far below, at the dust, and a rewrite that dropped it there killed the whole
 // handler once ("does not have a variable _walking"). Reading it once, early, is the fix for both.
 var _walking = global.coopPeerWalking;
 
+// **Which sprite, and it now depends on the peer's state in both directions** (M5k).
+//
+// `global.coopPeer.sprite` is what the peer sent, already resolved by
+// `CoopResolvePeerSprite` - `sprPlayerWalk` for `"walk"`, the idle sprite for `"idle"` - so a real
+// Forager peer needs nothing here. The mock peer sends `sprite = -1` (it has no assets), so this
+// block is the whole decision for it:
+//
+//   * **walking** -> `global.coopWalkSprite` (`sprPlayerWalk`, six frames, resolved by name);
+//   * **standing** -> `CoopResolveIdleSprite()`, the player's **idle** sprite, so the head and
+//     backpack bob. This is the M5k change: before it, a standing peer got the **body** sprite,
+//     and the body sprite is the walk pair - so the puppet stood in a walk stance and the owner
+//     reported that it "uses walk animation while standing still".
+//
+// `sprPlayerIdle` itself does NOT resolve in this build, which is why the idle goes through the
+// candidate chain in `CoopResolveIdleSprite` rather than a single name.
 var _spr = global.coopPeer.sprite;
 if (_spr <= 0) {
-    // `global.coopWalkSprite` is the walking body (`sprPlayerWalk`), resolved by name. Prefer it
-    // while the peer is walking, so the walk is a walk and not an idle stance with a running frame.
     var _fallback = -1;
     if (_walking) {
         if (global.coopWalkSprite <= 0) {
@@ -82,6 +85,9 @@ if (_spr <= 0) {
             if (global.coopWalkSprite <= 0) global.coopWalkSprite = asset_get_index("Player Walk");
         }
         _fallback = global.coopWalkSprite;
+    } else {
+        CoopResolveIdleSprite();
+        _fallback = global.coopIdleSprite;
     }
     if (_fallback <= 0) {
         CoopResolveBodySprite();
@@ -180,73 +186,74 @@ var _y = global.coopDrawY;
 var _face = global.coopPeer.facing;
 if (_face == 0) _face = 1;
 
-// **The animation (M3.4, measured 2026-10-22).** The frame is the peer's own, as sent - there
-// is nothing to run locally.
+// **The animation (M5j, measured 2026-10-22).** The frame is **not** the peer's index - that
+// number is a free-running timer, and this block used to say the opposite, in a paragraph that
+// also disagreed with the code below it. It is deleted rather than kept: a stale comment that
+// contradicts the code next to it is how the next wrong guess gets written.
 //
-// **The arithmetic, from two numbers in the owner's own wire log - and it is `floor(index)`,
-// with no division at all.** The earlier "over two ticks" came from a wrong pairing of the
-// constants, and the owner's report ("the animation was better before") is what sent this
-// back to the numbers:
+// What is left of the old reasoning is the two constants it got wrong, recorded so they are not
+// used again: "15 px of walking moved the index 3.15, so one unit is 4.76 px" and "a cycle is six
+// units, i.e. 0.32 s". The probe's own clean walking samples say **12.2, 13.0, 12.8 px per unit**
+// (33/2.70, 76/5.85, 75/5.85), which is where the 12.2 below comes from.
 //
-//  * **15 px of walking moved the index 3.15** - so one index-unit is 15 / 3.15 = **4.76 px**.
-//  * `PLAYER_WALK_SPEED 90 px/s`, and the index moves 3.15 per 15 px, so the index runs at
-//    90 / 4.76 = **18.9 units per second** - which is the walk constant divided by the step
-//    the log measures, not by `SPAWN_ANIM_SPEED 4` (that pairing gave 22.5 and is what was
-//    wrong).
-//  * The index runs `0.00 … 5.85 -> 0.00`, so the cycle is **six index-units**.
+// **The index runs while the player stands still**, so it also cannot be the walk:
 //
-// Six units a cycle at 4.76 px each is 28.6 px of walking per sprite cycle, i.e. **0.32 s** at
-// 90 px/s - an ordinary walk cycle. Dividing by two made the sprite take twelve units, 57 px
-// and 0.63 s per cycle: **half rate**, which is exactly what the owner saw after the last
-// change. So the sprite frame **is** the index, and the cycle is six.
+//     idx 120 d 0   px 15   moved 0    <- stood still, the index did not move
+//     idx 105 d 585 px 76   moved 0    <- then ran a whole cycle while walking 76 px
+//     pos 667 frame 2.55 -> pos 671 frame 3.00    <- +0.45 for 4 px
+//     pos 681 frame 4.35 -> ...                   <- +0.45 for 2 px
 //
-// **What each earlier version got wrong**, so it is not tried a fourth time: sending an
-// integer threw the timer away and stuttered; running a *local cycle* of twelve frames made
-// the puppet walk at half the player's rate; a **division by two** did the same; and
-// **interpolating** the frame carried it a packet behind the player.
+// So the walk cycle is driven **on this side, from movement** (see the frame block below), and the
+// **idle** is driven by the peer's own idle sprite - which is the owner's request in M5k: the head
+// and backpack bob while standing still. See `global.coopIdleSprite`.
 //
-// **The index the peer sends is NOT the frame, and this is measured, not reasoned (M5j).**
+// **Two clocks, one for each state, and neither is the peer's index** (M5k).
 //
-// Every earlier version here tried to turn `objPlayer.image_index` into a sprite frame. The live
-// `idx probe` line (see CoopSendPos) shows that cannot work, twice over:
+// **Walking:** the frame follows the ground the puppet's own body covers, at the measured 12.2 px
+// per index-unit (the probe's clean walking samples: 33/2.70, 76/5.85, 75/5.85 = 12.2, 13.0,
+// 12.8). Six units a cycle, the sprite's own length. Standing still does not advance it.
 //
-//     idx 120 d 0   px 15   moved 0    <- the player stood still, the index did not move
-//     idx 105 d 585 px 76   moved 0    <- then ran a whole cycle (5.85 units = 585) while the
-//                                         player walked only 76 px
-//     pos 667,672 frame 2.55 -> pos 671,672 frame 3.00    <- +0.45 for 4 px
-//     pos 676,672 frame 3.45 -> pos 679,672 frame 3.90    <- +0.45 for 3 px
-//     pos 681,672 frame 4.35 -> ...                       <- +0.45 for 2 px
-//
-// The frame advances **+0.45 per packet no matter how far the player moved** - nine units a
-// second - and it keeps advancing while the player is **not moving at all**. So it is a
-// **free-running timer**, tied to neither the walk nor the speed, and drawing it is exactly what
-// made the puppet *walk in place*: the owner's report, and this line is why.
-//
-// So the walk cycle is driven **on this side, from movement**. The peer's own `"walk"`/`"idle"`
-// flag is the authority on *whether* the player is walking - that is what it means on the wire -
-// and the puppet advances its own frame with the ground its own body covers, at the measured
-// **12.2 px per index-unit** (the probe's own clean walking samples: 33/2.70, 76/5.85, 75/5.85 =
-// 12.2, 13.0, 12.8). A cycle is **six** units, the wrap the wire shows, and `sprPlayerWalk` has
-// six frames, so the cycle is the sprite's own length.
-//
-// **Why this is not the "local cycle of twelve" that already failed.** That one ran *twelve*
-// frames against a six-frame sprite, so the puppet walked at **half rate** and drifted from the
-// player - the owner saw "the walk animation is lagging", and the failure was the *length*. This
-// one is six frames on a six-frame cycle and is gated on the peer's own walking flag, so it starts
-// and stops exactly when the player does, at the rate the puppet is actually moving. It is not a
-// second clock - it is the same pixels-per-unit the player's own walk uses.
-var _ppu = 12.2;                      // px per index-unit, from the idx probe's walking samples
+// **Standing:** the puppet plays the **idle sprite's own bob** - this is the owner's request: "the
+// head and backpack bob while standing still - find that animation and pick up its speed". The
+// speed is the **sprite's own** `sprite_get_speed` / `sprite_get_speed_type`, not a constant, so
+// the bob runs at the rate the game plays that asset. `sprite_get_speed_type` is 0 for
+// frames-per-image and 1 for images-per-frame; the two are inverses and the type decides which
+// arithmetic applies.
 if (_walking) {
+    var _ppu = 12.2;                  // px per index-unit, from the idx probe's walking samples
     global.coopPeerFrameF += global.coopPeerSpeed * _dt / _ppu;
     var _cyc = global.coopStepMax + 1;
     if (global.coopPeerFrameF >= _cyc) global.coopPeerFrameF = global.coopPeerFrameF mod _cyc;
     if (global.coopPeerFrameF < 0) global.coopPeerFrameF = 0;
-} else if (global.coopPeerFrameF >= 1) {
-    // Standing still: settle onto the idle frame, so the puppet does not freeze mid-stride.
-    global.coopPeerFrameF = 0;
+} else {
+    // The idle bob. `_idle_n` frames, played at the sprite's own speed.
+    var _idle_n = _spr > 0 ? sprite_get_number(_spr) : 1;
+    if (_idle_n < 1) _idle_n = 1;
+    var _idle_units = 0;              // frame-units per millisecond
+    if (_spr > 0 && _idle_n > 1) {
+        var _sp = sprite_get_speed(_spr);
+        var _st = sprite_get_speed_type(_spr);
+        if (_sp > 0) {
+            // GameMaker's sprite speed is frames (or images) per *game step*, and a step here is
+            // 60 a second on this build's own walk constant (`90 px/s` at `SPAWN_ANIM_SPEED`-pace).
+            // Convert to per-millisecond so it is drawn on the same clock as everything else.
+            var _per_step = (_st == 1) ? (1 / _sp) : _sp;
+            _idle_units = _per_step / 16.667;
+        }
+    }
+    if (_idle_units <= 0) _idle_units = 0.006;   // no speed on the asset: a slow, even bob
+    global.coopIdleFrameF += _idle_units * _dt;
+    if (global.coopIdleFrameF >= _idle_n) global.coopIdleFrameF = global.coopIdleFrameF mod _idle_n;
+    if (global.coopIdleFrameF < 0) global.coopIdleFrameF = 0;
 }
-var _frame = floor(global.coopPeerFrameF);
-if (_frame < 0) _frame = 0;
+var _frame;
+if (_walking) {
+    _frame = floor(global.coopPeerFrameF);
+    if (_frame < 0) _frame = 0;
+} else {
+    _frame = floor(global.coopIdleFrameF);
+    if (_frame < 0) _frame = 0;
+}
 // **The cycle's length is the sprite's own frame count**, not a constant (M5j). `coopStepMax` is
 // the last frame index, and it was a hard-coded 5 from the wire's six-unit cycle - but a frame
 // past the end of a sprite draws **nothing**, so a sprite with fewer frames would make the puppet

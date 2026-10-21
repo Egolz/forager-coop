@@ -1444,7 +1444,7 @@ if (instance_exists(objPlayer)) {
         var _pl_text = "Co-op: land probe - tried " + string(_pl_tx) + "," + string(_pl_ty)
                      + "; that cell is land now: " + _pl_here
                      + "; cells that became land: " + string(_pl_count)
-                     + (string(_pl_count) > 0 ? " at " + _pl_new : "")
+                     + (_pl_count > 0 ? " at " + _pl_new : "")
                      + "; the undo: " + _pl_undo + ".";
         Trace(_pl_text);
         CoopSendDebugLine(_pl_text);

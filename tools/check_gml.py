@@ -188,6 +188,31 @@ def check_forbidden(where: str, text: str, problems: list[str]) -> None:
                             f"Use an `if` guard.")
 
 
+def check_string_math(where: str, text: str, problems: list[str]) -> None:
+    """A string compared with a number is a runtime error in GML, not a false result.
+
+    GameMaker does not convert types in a comparison: `"5" > 0` is not true, it is a
+    hard error at the moment the line runs, and the mod's own script dies with it:
+
+        Execution error: [error] Can't apply > to string and number called from
+        Forager Coop/Net.gml[L1447,c43]
+
+    (live, 2026-10-21 - the land probe built a report line with
+    `string(_pl_count) > 0`, and the whole report was lost at that line.) The compiler
+    does not catch it and the symbol table cannot: it is a **type** question, and GML is
+    dynamically typed. So the checker looks for the shape of it: a `string(...)` on one
+    side of a comparison and a bare number on the other.
+    """
+    pat = re.compile(r"string\s*\([^()]*\)\s*(==|!=|<=|>=|<|>)\s*(-?\d+(?:\.\d+)?)"
+                     r"|(-?\d+(?:\.\d+)?)\s*(==|!=|<=|>=|<|>)\s*string\s*\([^()]*\)")
+    for ln, line in enumerate(text.splitlines(), 1):
+        for m in pat.finditer(line):
+            problems.append(f"{where}:{ln}: a string is compared with a number "
+                            f"(`{m.group(0).strip()}`) - GameMaker raises \"Can't apply "
+                            f"{m.group(1) or m.group(4)} to string and number\" at that "
+                            f"line and the script dies there")
+
+
 def check_key_constants(where: str, text: str, problems: list[str]) -> None:
     """The game's key constants are a fixed list, and it stops at F12.
 
@@ -435,6 +460,7 @@ def main(argv: list[str] | None = None) -> int:
         text = stripped[f]
         where = f.relative_to(here) if here in f.parents else f
         check_forbidden(str(where), text, problems)
+        check_string_math(str(where), text, problems)
         check_key_constants(str(where), text, problems)
         blocks = find_defines(text)
         if not blocks:

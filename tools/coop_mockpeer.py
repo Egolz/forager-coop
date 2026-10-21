@@ -921,16 +921,19 @@ class Peer:
             self.send(snap_land(self.room, 1, 0, []))
             log("-> SNAP_LAND end of snapshot")
         # M3.2: the world's buildings. The mock has none, so it sends one - a furnace
-        # (row 1 of the real structure database) at the cell under the player, with the
-        # "remove the buildings this side has and the host does not" flag **off**. The
-        # flag would take the client's own buildings away, and a peer without a world
-        # must never be allowed to do that.
+        # (row 1 of the real structure database) at the **far corner of the map**, the
+        # same corner the land snapshot put land on.
+        #
+        # **Not at the player's feet any more.** The game's own structure creation
+        # clears the ground it stands on, so a furnace appearing where the player stood
+        # destroyed whatever was under it - a rock, which then dropped its ten stones.
+        # The owner saw a block break and an item fall out on every connect and thought
+        # the peer had done it; the peer had, but only by asking for a building in the
+        # middle of the island. The map corner has nothing on it.
         if self.struct_on_hello and not self.struct_sent and self.player is not None:
             self.struct_sent = True
-            _sx = int(px // 16) * 16
-            _sy = int(py // 16) * 16
-            self.send(snap_struct(self.room, 1, 0, [(_sx, _sy, 1)]))
-            log(f"-> SNAP_STRUCT 1 structure (id 1) at {_sx},{_sy}")
+            self.send(snap_struct(self.room, 1, 0, [(8, 8, 1)]))
+            log("-> SNAP_STRUCT 1 structure (id 1) at 8,8 (the map corner)")
             self.send(snap_struct(self.room, 1, 0, []))
             log("-> SNAP_STRUCT end of snapshot")
 

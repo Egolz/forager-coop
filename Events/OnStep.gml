@@ -99,6 +99,35 @@ if (!instance_exists(objPlayer)) exit;
 
 global.coopTick += 1;
 
+// **How fast does the player's own `image_index` REALLY advance - per GAME STEP?** (M5k3f)
+//
+// Every previous rate round measured the index against **wall-clock time** or against **packet
+// distance**, and both gave numbers that disagreed with what the owner sees:
+//
+//     "too fast" (0.17 s/cycle, from image_speed 0.60)   ->   "too slow" (0.67 s, from the index rise)
+//
+// The index is the game's own frame counter, so the honest unit is **units per game step** - a step
+// is a step no matter what the frame rate does - and this counts exactly that: the raw index each
+// step, and how much it moved since the last probe dump. The owner's own `idx probe` already showed
+// the index **stopped dead while standing** (`imgidx 4.20` five times in a row), so this also has to
+// separate "standing" from "walking": the two are summed separately.
+//
+// `coopIdxUnitsStand` / `coopIdxUnitsWalk` are hundredths gained, `coopIdxStepsStand` /
+// `coopIdxStepsWalk` are the steps they took, and the probe line reports each as units/step.
+if (global.coopPeerAlive) {
+    var _is_now = abs(objPlayer.image_index) * 100;
+    var _is_d   = _is_now - global.coopIdxStepPrev;
+    if (_is_d < 0) _is_d += 600;                  // the six-frame cycle wraps at 600 hundredths
+    if (global.coopLastMoved) {
+        global.coopIdxUnitsWalk += _is_d;
+        global.coopIdxStepsWalk += 1;
+    } else {
+        global.coopIdxUnitsStand += _is_d;
+        global.coopIdxStepsStand += 1;
+    }
+    global.coopIdxStepPrev = _is_now;
+}
+
 
 
 

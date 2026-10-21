@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.78-m5k3";
+global.coopVersion  = "0.0.79-m5k4";
 global.coopProtocol = 11;  // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -236,6 +236,15 @@ global.coopIdxProbeTick = 0;
 global.coopIdxProbeIdx  = 0;
 global.coopIdxProbeX    = 0;
 global.coopIdxProbeY    = 0;
+// M5k3f: **units per GAME STEP, the honest rate unit** (see the accumulator in OnStep). The index
+// and the step count are summed separately for standing and walking, because the live wire shows the
+// index stopping dead while the player stands - so one average over both states would describe
+// neither. `coopIdxStepPrev` is the raw index (hundredths) at the last step.
+global.coopIdxStepPrev    = 0;
+global.coopIdxUnitsStand  = 0;
+global.coopIdxStepsStand  = 0;
+global.coopIdxUnitsWalk   = 0;
+global.coopIdxStepsWalk   = 0;
 // Where the peer is actually drawn. The host decides, because the host is the side that
 // knows the world - a peer with no physics (the mock) reports a position inside a tree or in
 // the water, and the host pulls it onto ground a body could stand on.

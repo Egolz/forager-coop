@@ -250,13 +250,27 @@ if (_face == 0) _face = 1;
 // stand-still body vanishing) **and** the clock has to run at the measured index rate. Each round
 // applied one and concluded the other from a single, correct, incomplete observation.
 //
-// So the rate is the **measured index rise**, with a `0.60`-per-step reading explicitly **not** used:
-// `0.009 units/ms` as the constant, and `coopPeerStepRate` - the same rise measured live between two
-// packets - when it is available. The field that carried `image_speed` on the wire (protocol 10) was
-// removed again in protocol 11, because a number that does not describe the drawing is worse than no
-// number: it silently overrides a measurement that does.
+// **The bob's period is 0.5 s, and it is set from the owner's own measurement.**
+//
+// The history is a calibration, not a guess: 0.17 s per cycle read as *"too fast"*, 0.67 s read as
+// *"too slow"*, and the owner's measured numbers - 6/s then, 1.5/s then - bracket the truth. Asked
+// directly for the player's own model, the answer is **~2 bobs a second**, i.e. a **0.5 s cycle**.
+//
+// That number is also what the arithmetic was missing. A "bob" is a **whole cycle**, not one frame,
+// and the two rates that were tried were both read as if a cycle were six frames: `image_speed 0.60`
+// is 36 frames/s, and 36 fps / 2 cycles/s = **18 frames per cycle** - so the bob does **not** run on
+// the six-frame `image_index` at all, which is consistent with the other live fact, that the index
+// **stops dead** while the player stands (`imgidx 4.20` five probes in a row). The puppet's clock is
+// therefore set directly from the period the owner can actually see, rather than from a counter that
+// stops when it matters.
+//
+// `coopPeerStepRate` is used when it is available: it is the rate the peer itself reports, so a peer
+// whose bob genuinely differs drives the puppet to match. Otherwise the **period** is the source of
+// truth and the frame count converts it - `_idle_n / period / 1000` units per millisecond - so 0.5 s
+// stays the one number that can be tuned, instead of a magic rate that has to be re-derived.
+var _COOP_IDLE_PERIOD_S = 0.5;                  // one whole bob, measured by the owner at ~2/s
 var _IDLE_UNITS = global.coopPeerStepRate;      // units per millisecond, measured from the peer
-if (_IDLE_UNITS <= 0.0005) _IDLE_UNITS = 0.009; // 0.009 units/ms = 9 units/s = 0.67 s per cycle
+if (_IDLE_UNITS <= 0.0005) _IDLE_UNITS = -1;    // -1 = "use the period" (computed with the frame count)
 if (_walking) {
     var _ppu = 12.2;                  // px per index-unit, from the idx probe's walking samples
     global.coopPeerFrameF += global.coopPeerSpeed * _dt / _ppu;
@@ -268,7 +282,16 @@ if (_walking) {
     // turn the bob off - the exact regression the owner reported. `sprite_get_number` takes 0 fine.
     var _idle_n = sprite_get_number(_spr);
     if (_idle_n < 1) _idle_n = 1;
-    global.coopIdleFrameF += _IDLE_UNITS * _dt;
+    // -1 means the peer did not report a rate, so the **period** drives it: a whole cycle takes
+    // `_COOP_IDLE_PERIOD_S`, whatever the sprite's frame count is. One number to tune, and it is the
+    // number the owner can see (bobs per second), not a rate that has to be re-derived each time.
+    var _idle_units = _IDLE_UNITS;
+    if (_idle_units < 0) {
+        var _period_ms = _COOP_IDLE_PERIOD_S * 1000;
+        if (_period_ms <= 1) _period_ms = 500;
+        _idle_units = _idle_n / _period_ms;
+    }
+    global.coopIdleFrameF += _idle_units * _dt;
     if (global.coopIdleFrameF >= _idle_n) global.coopIdleFrameF = global.coopIdleFrameF mod _idle_n;
     if (global.coopIdleFrameF < 0) global.coopIdleFrameF = 0;
 } else {

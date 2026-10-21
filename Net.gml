@@ -525,25 +525,36 @@ if (global.coopPeerAlive) {
         var _ip_di = _ip_idx - global.coopIdxProbeIdx;
         if (_ip_di < 0) _ip_di += 600;          // the cycle is six units = 600 hundredths
         var _ip_rate = _ip_di > 0.001 ? (_ip_px / (_ip_di / 100)) : -1;
-        // **The animation's own speed** is printed with the index, because that is what "match its
-        // speed" actually needs and it cannot be derived from a sprite with `speed 0`: every player
-        // sprite reports `sprite_get_speed -> 0`, and in GameMaker `0` means "use the room's
-        // default", not "not animated". So the game must be setting the instance's `image_speed`
-        // itself, and this prints it. `objPlayer.image_index` climbs **+0.45 per packet at 20 Hz =
-        // 9 units/s**, i.e. a six-frame cycle in **0.67 s** - and that rise rate *is* the animation
-        // rate, so the probe carries both and the second must agree with the first.
+        // **The honest rate unit: units per GAME STEP** (M5k3f). Everything before this measured the
+        // index against wall-clock time or against distance, and the two agreed with neither the
+        // owner's eye nor each other. The index is the game's own frame counter, so it is counted
+        // here against the thing that drives it - the step - and standing is separated from walking,
+        // because the live wire shows the index **stopped dead** while the player stands
+        // (`imgidx 4.20` five probes in a row). `units/step` is the number the puppet's clock needs.
+        var _ip_stand = global.coopIdxStepsStand > 0
+                      ? (global.coopIdxUnitsStand / 100) / global.coopIdxStepsStand : -1;
+        var _ip_walk  = global.coopIdxStepsWalk > 0
+                      ? (global.coopIdxUnitsWalk / 100) / global.coopIdxStepsWalk : -1;
         var _ip_line = "idx probe: idx " + string(floor(_ip_idx))
                      + " d " + string(floor(_ip_di))
                      + " px " + string(floor(_ip_px))
                      + " rate " + string(floor(_ip_rate * 100) / 100) + " px/unit"
                      + " moved " + string(global.coopLastMoved ? 1 : 0)
                      + " imgspd " + string(objPlayer.image_speed)
-                     + " imgidx " + string(floor(objPlayer.image_index * 100) / 100);
+                     + " imgidx " + string(floor(objPlayer.image_index * 100) / 100)
+                     + " | stand " + string(floor(_ip_stand * 10000) / 10000) + " u/step over "
+                     + string(global.coopIdxStepsStand) + " st"
+                     + " | walk " + string(floor(_ip_walk * 10000) / 10000) + " u/step over "
+                     + string(global.coopIdxStepsWalk) + " st";
         Trace(_ip_line);
         CoopSendDebugLine(_ip_line);
         global.coopIdxProbeIdx = _ip_idx;
         global.coopIdxProbeX   = objPlayer.x;
         global.coopIdxProbeY   = objPlayer.y;
+        global.coopIdxUnitsStand = 0;
+        global.coopIdxStepsStand = 0;
+        global.coopIdxUnitsWalk  = 0;
+        global.coopIdxStepsWalk  = 0;
     }
 }
 buffer_write(_b, buffer_u8, objPlayer.room);

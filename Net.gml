@@ -1708,6 +1708,25 @@ switch (_cmd) {
         CoopCreateStructure(_msid, _mx, _my, CoopStructDepth(_my));
         Trace("Co-op: <- mutation seq " + string(_seq) + " '" + _mname + "' at "
               + string(_mx) + "," + string(_my) + ".");
+        // **The self-test.** The host said a structure now exists at (x,y); this side has to
+        // have it. Checking the **world**, not the packet, is what makes the client's apply
+        // path testable at all: the mock peer can assert the bytes that arrived, but only
+        // the game can assert that the structure is really there afterwards - and the
+        // client's apply path is the half that used to have no test at all.
+        var _mobj = CoopStructObject(_msid);
+        var _mhit = -1;
+        if (_mobj >= 0) _mhit = CoopStructureAt(_mobj, _mx, _my);
+        if (_mhit >= 0) {
+            Trace("Co-op: SELF-TEST PASS - seq " + string(_seq) + " applied: '"
+                  + _mname + "' is at " + string(_mx) + "," + string(_my) + ".");
+            CoopSendDebugLine("selftest PASS: mutation seq " + string(_seq) + " applied, '"
+                              + _mname + "' is at " + string(_mx) + "," + string(_my) + ".");
+        } else {
+            Trace("Co-op: SELF-TEST FAIL - seq " + string(_seq) + " did not put '"
+                  + _mname + "' at " + string(_mx) + "," + string(_my) + ".");
+            CoopSendDebugLine("selftest FAIL: mutation seq " + string(_seq) + " did not put '"
+                              + _mname + "' at " + string(_mx) + "," + string(_my) + ".");
+        }
         break;
 
     case CoopCmd.INTENT_REJECTED:

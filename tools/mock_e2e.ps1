@@ -46,7 +46,12 @@ $want = @(
     "<- PICKUP",
     "<- RESOURCE_DESTROY",
     "<- DEBUG e2e: a debug line from the mock host",
-    "-> INTENT_PLACE"
+    "-> INTENT_PLACE",
+    # The mock as a **host** confirms the client's placement. Without this the client's
+    # apply path - "the host says a structure exists here, so put it here" - has no offline
+    # test at all, because the mock used to be only ever a client. (The log line is
+    # "MUTATION seq=...", not "MUTATION_PLACE": that is how the peer prints it.)
+    "<- MUTATION seq="
 )
 $failed = @()
 foreach ($w in $want) { if ($text -notmatch [regex]::Escape($w)) { $failed += $w } }

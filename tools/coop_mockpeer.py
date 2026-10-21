@@ -162,6 +162,19 @@ def intent_place(intent_id: int, room: int, x: int, y: int, name: str) -> bytes:
             + p_str(name))
 
 
+def mutation_place(seq: int, intent_id: int, room: int, x: int, y: int,
+                   depth: int, name: str) -> bytes:
+    """The host's confirmation of a placement (packet 9).
+
+    Built by the mock so it can act as a **host** and drive the client: the client's apply
+    path - "the host says a structure now exists here, so put it here" - is the half of the
+    protocol that the mock could never test while it was only a client, because the mock has
+    no world to apply anything to.
+    """
+    return (bytes([MUTATION_PLACE]) + struct.pack("<IIBiii", seq, intent_id, room, x, y, depth)
+            + p_str(name))
+
+
 def structure_table(entries: list[tuple[int, str]]) -> bytes:
     """The packet only the host sends, id -> name (packet 11)."""
     out = bytes([STRUCTURE_TABLE]) + struct.pack("<H", len(entries))
@@ -409,6 +422,12 @@ class Peer:
         self.player = None          # last position the game reported
         self.pos_logged = None      # last position we bothered to print
         self.px, self.py = 620, 620 # where our own puppet currently is
+        # The mutation sequence, when we are the host. The client applies confirmed
+        # mutations in seq order and ignores the rest, so the host's counter has to
+        # increase - it is the client's "have I seen this already" test.
+        self.seq = 0
+        self.last_place_name = ""   # the name the client last built with
+        self._last_host_pos = 0.0
         # Where the puppet **stands**. Picked once, when the mock first learns where the host
         # is, and then left alone - see tick().
         self.anchor: tuple[int, int] | None = None
@@ -644,6 +663,41 @@ class Peer:
                     self.placed = True
                     log(f"!! every candidate spot in the {len(self.place_spots)}-cell spiral "
                         f"was refused (all water or occupied) - no free ground near the player")
+        elif name == "INTENT_PLACE" and self.is_host:
+            # The client asked to build something, and we are the host, so **we decide**.
+            #
+            # The real host validates against the world - water, occupancy, distance from the
+            # asker - and the mock has no world to validate against, so it confirms. What
+            # this covers is the half nothing else covers: the **client's apply path**. The
+            # mock peer used to be only a client, so it could assert the bytes the host
+            # sent but never the world's reaction to them - and the world is the thing that
+            # has to be right.
+            #
+            # The name is echoed back rather than invented, so it is always a name the
+            # client's own build menu knows: the client's names are localized, and a mock
+            # that made one up would be rejected with "unknown structure".
+            #
+            # **The structure's name is `pkt["structure"]`, not `pkt["name"]`** - the
+            # latter is the *kind* of packet ("INTENT_PLACE"), and sending that as a
+            # structure name would have the client reject the confirmation.
+            self.seq += 1
+            self.last_place_name = pkt["structure"]
+            self.send(mutation_place(self.seq, pkt["intentId"], pkt["room"],
+                                     pkt["x"], pkt["y"], -pkt["y"], pkt["structure"]))
+            log(f"-> MUTATION_PLACE seq={self.seq} '{pkt['structure']}' at "
+                f"{pkt['x']},{pkt['y']} (confirming the client's request)")
+
+            # And a second one the client did **not** ask for, at the next cell. This is
+            # the visible proof that the host drives the client's world: the player sees a
+            # structure appear that they did not build.
+            self.seq += 1
+            self.send(mutation_place(self.seq, 0, pkt["room"],
+                                     pkt["x"] + 16, pkt["y"], -(pkt["y"]),
+                                     pkt["structure"]))
+            log(f"-> MUTATION_PLACE seq={self.seq} '{pkt['structure']}' at "
+                f"{pkt['x'] + 16},{pkt['y']} (one the client did not ask for)")
+        elif name == "INTENT_PLACE":
+            log(f"   (the client asked to build '{pkt['structure']}' at {pkt['x']},{pkt['y']})")
         elif name == "MUTATION_PLACE":
             # A confirmed placement. If it is the answer to our own intent, that spot
             # was free - the positive half of the spot check. A second round then asks
@@ -669,6 +723,20 @@ class Peer:
         elif name in ("REJECT", "BYE"):
             log("peer ended the session")
             raise SystemExit(0)
+
+    def host_tick(self) -> None:
+        """What the host side streams.
+
+        The host tells the client where it is, so the client can draw it. The mock is not a
+        game and has no player of its own, so it stands next to the client - which is enough
+        to exercise the client's draw path, and is honest about what it is.
+        """
+        now = time.time()
+        if not self.handshaken or now - self._last_host_pos < 0.1:
+            return
+        self._last_host_pos = now
+        px, py = self.player if self.player else (620, 620)
+        self.send(pos(px + 48, py, angle=0, facing=1, sprite=-1, image=0, room=self.room))
 
     def choose_structure(self) -> str | None:
         if self.place_wanted:
@@ -1084,7 +1152,17 @@ def _drain(s: socket.socket, seconds: float) -> bytes:
 def run_server(port: int) -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("0.0.0.0", port))
+    # The port may still be held by a game that is hosting and has not let go of it yet, so
+    # wait for it rather than dying. The harness wants the mock to be the host and the game
+    # to be the client, and a client does not bind the port - so whoever got there first
+    # has to give way, and the mock is the one that can wait.
+    while True:
+        try:
+            srv.bind(("0.0.0.0", port))
+            break
+        except OSError as exc:
+            log(f"port {port} is busy ({exc}) - waiting for it")
+            time.sleep(2)
     srv.listen(1)
     log(f"listening on 0.0.0.0:{port} - now press F6 in the game and enter 127.0.0.1")
     conn, addr = srv.accept()
@@ -1093,8 +1171,11 @@ def run_server(port: int) -> None:
     peer = Peer(conn, is_host=True)
     while True:
         peer.pump()
-        peer.tick()
-        time.sleep(0.1)
+        # The host side: confirm the client's placements and stream our own position. The
+        # client half of the protocol is what this exercises - the half a mock that is only
+        # ever a client can never reach.
+        peer.host_tick()
+        time.sleep(0.05)
 
 
 def main() -> int:

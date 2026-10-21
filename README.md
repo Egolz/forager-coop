@@ -126,6 +126,40 @@ tools/steamlink/            a Steam relay, so two players need no IP address and
                             keeps talking TCP to 127.0.0.1 and the relay carries
                             those bytes over Steam. See its own README.
 docs/PROTOCOL.md            packet format + GameMaker's socket handshake
+
+### The two halves, and how to test them on one PC
+
+Forager refuses to run twice on one PC, so the two roles of the protocol cannot be played
+by two people here. They can still be **tested**, one half at a time, by swapping which
+side the mock plays:
+
+| run | the game is | the mock is | what it covers |
+|---|---|---|---|
+| A | the **host** | the client | the host validates, applies and broadcasts; the mock asserts the bytes and asks for placements |
+| B | the **client** | the **host** | the client applies what the host says; the mock confirms placements and sends one the client never asked for |
+
+Run B is the one that had no test at all. The mock used to be only ever a client, so it
+could assert the bytes that arrived but never the world's reaction to them - and the world
+is the thing that has to be right. So the mock can now act as a host: it confirms a
+client's `INTENT_PLACE` with a `MUTATION_PLACE`, and then sends a **second** mutation the
+client did not ask for, one cell over.
+
+The mod checks its own world after applying a mutation and says so in the console and
+over the wire:
+
+```
+Co-op: SELF-TEST PASS - seq 1 applied: 'forge' is at 672,608.
+```
+
+To run B:
+
+```
+python tools\coop_mockpeer.py server --port 6511
+```
+
+then in the game press **F6** and enter `127.0.0.1`, and **build something**. The mock
+confirms it, a second structure appears next to the one you built, and the console says
+PASS or FAIL.
 ```
 
 There is no build step: edit the files, run `tools/deploy.ps1`, then **COMPILE** in the

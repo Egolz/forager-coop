@@ -41,7 +41,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.42-m3i";
+global.coopVersion  = "0.0.43-m3i";
 global.coopProtocol = 5;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);

@@ -23,6 +23,13 @@ Remove-Item $srvLog, $cliLog -ErrorAction SilentlyContinue
 python -u tools/coop_mockpeer.py selftest
 if ($LASTEXITCODE -ne 0) { Write-Host "selftest FAILED"; exit 1 }
 
+# The protocol number is **asked of the mock**, not written down here: it was written down
+# in two places (the mod's Main.gml and the mock) and they drifted, which showed up as an
+# endless reconnect loop rather than as a test failure. The mock reads it out of the mod's
+# own source, and this script asks the mock.
+$proto = (python -c "import sys; sys.path.insert(0,'tools'); import coop_mockpeer as m; print(m.PROTOCOL)").Trim()
+Write-Host "protocol under test: $proto"
+
 $srv = Start-Process -FilePath "python" `
     -ArgumentList "-u", "tools/coop_mockpeer.py", "server", "--port", "$port", "--loot", "--echo", "--land", "--struct" `
     -RedirectStandardOutput $srvLog -RedirectStandardError "$log/server.err" `
@@ -35,7 +42,7 @@ Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 $text = Get-Content $cliLog -Raw
 $want = @(
     "GM handshake complete (client side)",
-    "<- WELCOME protocol=6",
+    "<- WELCOME protocol=$proto",
     # M3.1: the name rides the handshake, so a WELCOME that does not carry it is a failure -
     # the field order slip this catches is exactly the one that cost M2.2 a whole evening.
     "name='mock'",

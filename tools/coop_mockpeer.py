@@ -56,7 +56,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import random
+import re
 import socket
 import struct
 import sys
@@ -65,6 +67,34 @@ import time
 
 PROTOCOL = 6
 VERSION = "mockpeer-6"
+
+
+def _protocol_from_source() -> int | None:
+    """Read the protocol number out of the mod's own source, so the two cannot drift.
+
+    The mock and the mod have to speak the same protocol, and the number was written down
+    twice - once in `Main.gml` and once here. They drifted (the mod moved to 7 for the
+    animated puppet, the mock stayed at 6), and the symptom was **an endless reconnect
+    loop**: the host answered every hello with "protocol mismatch", and the client's hello
+    is a retry until the host answers, so the two kept finding each other forever.
+
+    The mock lives in the mod's own repository, so it can read the number instead of
+    keeping a copy of it. When the source is not there - the mock run against a deployed
+    mod - the constant is used.
+    """
+    src = pathlib.Path(__file__).resolve().parent.parent / "Main.gml"
+    try:
+        text = src.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return None
+    m = re.search(r"global\.coopProtocol\s*=\s*(\d+)", text)
+    return int(m.group(1)) if m else None
+
+
+_src_protocol = _protocol_from_source()
+if _src_protocol is not None:
+    PROTOCOL = _src_protocol
+    VERSION = f"mockpeer-{PROTOCOL}"
 # The name the mock presents to the host (M3.1). ASCII on purpose: the host draws it with the
 # game's own font, and a non-ASCII name is exactly the kind of thing that renders as boxes if
 # the font lacks the glyphs.
@@ -140,6 +170,19 @@ def p_str(s: str) -> bytes:
 
 def hello() -> bytes:
     return bytes([HELLO, PROTOCOL]) + p_str(VERSION) + p_str(NAME)
+
+
+def reject(reason: str) -> bytes:
+    """The host refuses the peer (packet 3).
+
+    **A REJECT, not a BYE.** The real host answers a hello it does not understand with a
+    REJECT, and the client treats that as final: it disconnects and stops saying hello.
+    The mock used to answer with a BYE, which reads as "the peer left" - and the client's
+    hello is a retry until the host answers, so the two kept finding each other: an
+    **endless reconnect loop** over a protocol number that did not match (live,
+    2026-10-22).
+    """
+    return bytes([REJECT]) + p_str(reason)
 
 
 def welcome() -> bytes:
@@ -694,8 +737,8 @@ class Peer:
 
         if name == "HELLO" and self.is_host:
             if pkt["protocol"] != PROTOCOL:
-                self.send(bye(f"protocol mismatch mock={PROTOCOL} peer={pkt['protocol']}"))
-                log("-> BYE protocol mismatch")
+                self.send(reject(f"protocol mismatch mock={PROTOCOL} peer={pkt['protocol']}"))
+                log(f"-> REJECT protocol mismatch (mock={PROTOCOL} peer={pkt['protocol']})")
                 raise SystemExit(1)
             self.send(welcome())
             log("-> WELCOME")

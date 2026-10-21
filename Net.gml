@@ -500,17 +500,6 @@ buffer_write(_b, buffer_string, global.coopLastMoved ? "walk" : "idle");
 // interpolated frame is what put the puppet a packet behind the player (the owner, live:
 // "the puppet's walk animation is lagging").
 buffer_write(_b, buffer_u16, floor(abs(objPlayer.image_index) * 100) mod 65535);
-// **The instance's own animation speed, in hundredths** (M5k1, 2026-10-22).
-//
-// The idle bob has to run at the rate the **player's own model** is drawn at, and that rate is this
-// number: live, `objPlayer.image_speed` is **0.60** - 0.60 of a frame per game step. It is sent
-// rather than assumed, because the number is a property of the build and the equipped cosmetics,
-// and because it **disagrees by 4x** with the index two fields above (see the draw handler). With
-// the sender's own speed on the wire, the far end animates the puppet at the speed the player's
-// model is drawn at, instead of at a constant that happens to be close.
-//
-// It is sent as `floor(speed * 100)`, so 0.60 arrives as 60 and the reader divides by 100.
-buffer_write(_b, buffer_u16, floor(abs(objPlayer.image_speed) * 100) mod 65535);
 // **Is `objPlayer.image_index` really the walk clock?** Measured live (M5i, 2026-10-22), and the
 // answer decides what the puppet should be animated by.
 //
@@ -2377,10 +2366,6 @@ switch (_cmd) {
         // **two** of its ticks (`PLAYER_WALK_SPEED = SPAWN_ANIM_SPEED * 2`, both measured -
         // see CoopSendPos). So the step is `index / 2`, and the reset to 0 is the roll.
         var _ps_index = buffer_read(_buf, buffer_u16) / 100;
-        // **The instance's own animation speed** (M5k1, 2026-10-22), in hundredths, sent right after
-        // the index - see CoopSendPos for why the field exists and why it disagrees with the index
-        // by 4x. This is the rate the player's model is actually drawn at, and the idle bob uses it.
-        global.coopPeerImageSpeed = buffer_read(_buf, buffer_u16) / 100;
         global.coopPeer.room   = buffer_read(_buf, buffer_u8);
         global.coopPeerHold    = buffer_read(_buf, buffer_u16);
         global.coopPeer.seen   = true;

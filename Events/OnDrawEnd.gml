@@ -226,28 +226,37 @@ if (_face == 0) _face = 1;
 // `'sprPlayerIdle'`, and `objPlayer sprite_index -> 0`). This is the bob the owner asked for, and
 // the whole previous round was spent concluding the opposite from a `> 0` test that cannot see id 0.
 //
-// **The bob's rate, and the 4x that had to be settled rather than averaged.** Two numbers are
-// available and they disagree:
+// **The bob's rate, and the 4x that was settled the WRONG way last round.** Two numbers disagree:
 //
-//   * `objPlayer.image_speed` is **0.60** (live) - the game's own per-step speed for the instance,
-//     i.e. 0.60 of a frame per game step. At this build's sixtieth-of-a-second step that is
-//     **36 frames/s - a 0.17 s six-frame cycle**.
+//   * `objPlayer.image_speed` is **0.60** (live) - the instance's own per-step speed.
 //   * The index on the wire climbs **+0.45 per POS packet**, and a POS packet is sent every **3
-//     steps** (`OnStep`: `coopTick mod 3`), so that is **+0.15 per step - a 0.67 s cycle**.
+//     steps** (`OnStep`: `coopTick mod 3`), so that is **+0.15 per step**.
 //
-// Four times apart. The tie-breaker is *what the player's own model is drawn with*: the game draws
-// `objPlayer` from `sprite_index 0` advanced by its instance `image_speed`, and that instance speed
-// is **0.60**. The index the wire carries is therefore **not** the counter the model is drawn from
-// (0.15/step ≠ 0.60/step), which is consistent with everything else learned about it - it is a
-// free-running animation clock, not the sprite's own frame. So **the drawn rate wins: 0.60 frames
-// per step**, converted to the draw handler's millisecond clock at 60 steps a second:
-// `0.60 / 16.667 = 0.036 units/ms`. The measured index rise stays as the fallback for a peer whose
-// instance speed could not be read.
+// Four times apart. The previous round claimed `image_speed` was "the rate the model is drawn at, so
+// the eye sees it" and used 0.60/step = **0.036 units/ms - a 0.17 s cycle**. The owner's report is
+// the verdict on that reasoning:
 //
-// This is the same rule the `/2` and `4.76 px` rounds earned: **when two numbers about one thing
-// disagree, measure the thing the eye sees, do not average the numbers.**
-var _IDLE_UNITS = global.coopPeerImageSpeed / 16.667;   // frames per ms, from the game's own speed
-if (_IDLE_UNITS <= 0.0005) _IDLE_UNITS = 0.009;         // fallback: the measured index rise
+//     "Now the mock bobs its head too FAST."
+//
+// So `image_speed 0.60` is **not** what the eye sees, and the inference behind it was wrong: a
+// GameMaker instance can carry an `image_speed` that does not match the counter its sprite is
+// actually stepped by, and this build's `sprite_get_speed` is 0 for every player sprite anyway (see
+// below) - the two ways of asking for "the drawn speed" both failed to describe the drawing. The
+// number that **does** describe what moves on screen is the one measured directly: the index climbs
+// **+0.15 a step**, and that is **0.009 units/ms - a 0.67 s six-frame cycle**.
+//
+// That is the same rate the round before last used. The two rounds are not in conflict: **both fixes
+// were needed at once** - sprite 0 has to be **drawn** (the `>= 0` change, which is what stopped the
+// stand-still body vanishing) **and** the clock has to run at the measured index rate. Each round
+// applied one and concluded the other from a single, correct, incomplete observation.
+//
+// So the rate is the **measured index rise**, with a `0.60`-per-step reading explicitly **not** used:
+// `0.009 units/ms` as the constant, and `coopPeerStepRate` - the same rise measured live between two
+// packets - when it is available. The field that carried `image_speed` on the wire (protocol 10) was
+// removed again in protocol 11, because a number that does not describe the drawing is worse than no
+// number: it silently overrides a measurement that does.
+var _IDLE_UNITS = global.coopPeerStepRate;      // units per millisecond, measured from the peer
+if (_IDLE_UNITS <= 0.0005) _IDLE_UNITS = 0.009; // 0.009 units/ms = 9 units/s = 0.67 s per cycle
 if (_walking) {
     var _ppu = 12.2;                  // px per index-unit, from the idx probe's walking samples
     global.coopPeerFrameF += global.coopPeerSpeed * _dt / _ppu;

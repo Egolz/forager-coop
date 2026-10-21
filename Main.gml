@@ -46,8 +46,8 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.77-m5k2";
-global.coopProtocol = 10;  // 1 = presence only (M1); 2 adds the world-sync packets;
+global.coopVersion  = "0.0.78-m5k3";
+global.coopProtocol = 11;  // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
                            // 5 adds the player name to HELLO/WELCOME (M3.1);
@@ -57,9 +57,11 @@ global.coopProtocol = 10;  // 1 = presence only (M1); 2 adds the world-sync pack
                            // 8 adds MOB, the enemies appearing and dying;
                            // 9 carries the animation frame in hundredths - the frame
                            //     is a timer in this build, and a byte quantised the walk;
-                           // 10 adds the instance's `image_speed` to POS (hundredths),
-                           //     so the puppet's idle bob runs at the rate the player's
-                           //     own model is drawn at (M5k2)
+                           // 10 added the instance's `image_speed` to POS - REVERTED in 11,
+                           //     because 0.60/step is 4x the index's 0.15/step and the
+                           //     owner saw the puppet bob "too fast";
+                           // 11 is **9's POS again**: frame in hundredths, then room, then
+                           //     held item. The idle bob uses the measured index rate (M5k3)
                            //
                            // The number moves when the **wire format** moves, not when a
                            // feature is added. 5 was free again after a rejected CMD
@@ -185,13 +187,6 @@ global.coopPeerStepAt = 0;      // current_time of the packet the step came from
 global.coopPeerStepRate = 0;    // index-units per millisecond, measured between two packets
 global.coopPeerStepPrev = 0;    // the step in the packet before, to measure that rate
 global.coopPeerStepPrevAt = 0;  // and when it arrived
-// M5k1: **the peer's own instance animation speed** - `objPlayer.image_speed`, live **0.60** frames
-// per game step, sent in the POS packet in hundredths. This is the rate the player's *own model* is
-// drawn at, and the idle bob is played at it so the puppet's bob matches the player's. It is a
-// separate field from `coopPeerStepRate` because the two disagree by 4x (0.60/step = 0.036/ms
-// against the index's measured 0.009/ms) and the **drawn** rate is the one that matches the eye -
-// see the idle clock in the draw handler for why that tie is broken that way.
-global.coopPeerImageSpeed = 0;  // frames per game step, from the peer's own instance
 // M5j: **the puppet's own walk frame**, which is what is actually drawn - the peer's index is a
 // free-running timer (measured; see the draw handler) and is not the walk, so the cycle is driven
 // here from the puppet's own movement. Fractional, so the frames are smooth rather than stepped.

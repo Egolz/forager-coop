@@ -1215,7 +1215,12 @@ while (_ls_sent < _ls_total) {
     buffer_write(_ls_b, buffer_u8, CoopCmd.SNAP_LAND);
     buffer_write(_ls_b, buffer_u8, _ls_room);
     buffer_write(_ls_b, buffer_u8, _ls_gen);
-    buffer_write(_ls_b, buffer_u8, 1);      // flags: bit 0 = the client should drop the land it has and the host does not
+    // **Flags: 0 - no removal.** The client's island is the same island as the host's
+    // (the zone files of two saves are byte-identical - see NOTES.md), so there is
+    // nothing to remove; and the land the client has that the host does not is the
+    // land **the client bought with their own money**. Taking that away would be the
+    // one thing in the whole snapshot that cannot be undone.
+    buffer_write(_ls_b, buffer_u8, 0);
     buffer_write(_ls_b, buffer_u16, _ls_n);
     for (var _ls_i = 0; _ls_i < _ls_n; _ls_i += 1) {
         buffer_write(_ls_b, buffer_u16, _ls_xs[_ls_sent + _ls_i]);
@@ -1229,7 +1234,7 @@ var _ls_end = buffer_create(16, buffer_grow, 1);
 buffer_write(_ls_end, buffer_u8, CoopCmd.SNAP_LAND);
 buffer_write(_ls_end, buffer_u8, _ls_room);
 buffer_write(_ls_end, buffer_u8, _ls_gen);
-buffer_write(_ls_end, buffer_u8, 1);
+buffer_write(_ls_end, buffer_u8, 0);
 buffer_write(_ls_end, buffer_u16, 0);
 CoopSend(_ls_end);
 Trace("Co-op: world snapshot sent - " + string(_ls_total) + " land cells in room "

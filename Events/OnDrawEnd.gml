@@ -68,19 +68,18 @@ var _walking = global.coopPeerWalking;
 // Forager peer needs nothing here. The mock peer sends `sprite = -1` (it has no assets), so this
 // block is the whole decision for it:
 //
-//   * **walking** -> `global.coopWalkSprite` (`sprPlayerWalk`, six frames, resolved by name);
-//   * **standing** -> the **body**, which is the walk sprite **held on its standing frame**. The
-//     `...Idle` names in this build are cosmetics **overlays** (glasses, bow, backpack), not bodies:
-//     the run of 2026-10-22 drew `sprPlayerGlassesIdle` for a standing peer and the owner saw
-//     **"only the glasses, the name, and the tree"** - the accessory with no body under it.
-//
-// So a standing peer is drawn with the same body as a walking one, at frame 0, and **not animated**:
-// the body has no idle animation to play, and the bob the owner sees on their own model is in the
-// overlay layers. `CoopResolveIdleSprite` still answers `-1` for a genuine body idle if one ever
-// turns up, and then the bob is played at the game's own rate (see the idle clock below).
-var _idle_body = -1;              // a real idle BODY sprite, or -1 for "hold the walk sprite"
-if (!_walking) CoopResolveIdleSprite();
-if (!_walking && global.coopIdleSprite > 0) _idle_body = global.coopIdleSprite;
+//   * **walking** -> `global.coopWalkSprite` (`sprPlayerWalk`, id 1, six frames);
+//   * **standing** -> the **idle body**, `sprPlayerIdle`, which is **asset id 0** - and this was the
+//     round's whole trap. `asset_get_index("sprPlayerIdle")` answers **0** for "not found" *and* 0
+//     is `sprPlayerIdle`'s own index, so every `> 0` test in this codebase skipped it and the body
+//     fell through to the walk sprite. The `...Idle` names that *do* resolve by name
+//     (`sprPlayerGlassesIdle` id 2, `sprPinkBowIdle` id 4) are **cosmetics overlays**: drawing one
+//     as the body is the owner's "I only see the glasses, the name, and the tree".
+var _idle_body = -1;              // the idle body sprite index; **0 is valid** (sprPlayerIdle)
+if (!_walking) {
+    CoopResolveIdleSprite();
+    if (global.coopIdleSprite >= 0) _idle_body = global.coopIdleSprite;
+}
 
 var _spr = global.coopPeer.sprite;
 if (_spr <= 0) {
@@ -92,17 +91,20 @@ if (_spr <= 0) {
         }
         _fallback = global.coopWalkSprite;
     } else {
-        // The body while standing: a real idle body if the game has one, else the walk sprite held.
+        // The idle body. **Not `_fallback = _idle_body; if (_fallback <= 0) ...`** - that pattern
+        // would throw sprite 0 away, which is the bug this round is about. The `>= 0` test above
+        // already decided, and 0 is drawn like any other sprite.
         _fallback = _idle_body;
     }
-    if (_fallback <= 0) {
+    if (_walking && _fallback <= 0) {
         CoopResolveBodySprite();
         _fallback = global.coopBodySprite;
     }
     _spr = _fallback;
 }
-// Is the body being **animated** while standing? Only when there is a real idle body sprite.
-var _idle_anim = (!_walking && _idle_body > 0);
+// Is the body being **animated** while standing? Yes, whenever there is an idle body - and there
+// is: sprite 0, six frames, which the game itself plays at `image_speed 0.60` (live).
+var _idle_anim = (!_walking && _idle_body >= 0);
 
 // Where the peer is drawn. **The host decides.** A peer with no physics - the mock - reports
 // a position that can be inside a tree or in the water, and the owner saw exactly that. The
@@ -212,29 +214,40 @@ if (_face == 0) _face = 1;
 //     pos 681 frame 4.35 -> ...                   <- +0.45 for 2 px
 //
 // So the walk cycle is driven **on this side, from movement** (see the frame block below), and the
-// **idle** is driven by the peer's own idle sprite - which is the owner's request in M5k: the head
-// and backpack bob while standing still. See `global.coopIdleSprite`.
+// **idle** is the peer's own idle body sprite, `sprPlayerIdle`.
 //
-// **Two clocks, one for each state, and neither is the peer's index** (M5k).
+// **Two clocks, one for each state** (M5k, corrected 2026-10-22).
 //
 // **Walking:** the frame follows the ground the puppet's own body covers, at the measured 12.2 px
 // per index-unit (the probe's clean walking samples: 33/2.70, 76/5.85, 75/5.85 = 12.2, 13.0,
 // 12.8). Six units a cycle, the sprite's own length. Standing still does not advance it.
 //
-// **Standing:** the frame is **held**, because the body has no idle animation in this build (the
-// `...Idle` names are cosmetic overlays - live, 2026-10-22; see the sprite block above). If a real
-// idle **body** ever resolves (`_idle_anim`), its bob is played at the **game's own animation
-// rate**, which is the honest reading of "pick up its speed":
+// **Standing: the idle body is `sprPlayerIdle`, asset id 0** (live: `sprite_get_name(0)` is
+// `'sprPlayerIdle'`, and `objPlayer sprite_index -> 0`). This is the bob the owner asked for, and
+// the whole previous round was spent concluding the opposite from a `> 0` test that cannot see id 0.
 //
-//   * `sprite_get_speed` is **useless** for it - every player sprite reports `speed 0`, and in
-//     GameMaker `0` means "use the room's default", not "not animated". The first version of this
-//     code treated that 0 as a real rate, fell back to a made-up 0.006 units/ms, and the owner saw a
-//     **1.0 s** cycle against the player's 0.67 s - "the bob is there but **twice as slow**".
-//   * The rate that *is* real is the one the peer's wire already carries: `coopPeerStepRate`, the
-//     index's rise measured between two packets. That index is the game's **animation clock** - the
-//     free-running timer M5j caught and stopped calling a walk - so its rate is the rate the game
-//     plays an animation. Live it is **+0.45 per packet at 20/s = 9 units/s**, a six-frame cycle in
-//     **0.67 s**, and it holds while the player stands still.
+// **The bob's rate, and the 4x that had to be settled rather than averaged.** Two numbers are
+// available and they disagree:
+//
+//   * `objPlayer.image_speed` is **0.60** (live) - the game's own per-step speed for the instance,
+//     i.e. 0.60 of a frame per game step. At this build's sixtieth-of-a-second step that is
+//     **36 frames/s - a 0.17 s six-frame cycle**.
+//   * The index on the wire climbs **+0.45 per POS packet**, and a POS packet is sent every **3
+//     steps** (`OnStep`: `coopTick mod 3`), so that is **+0.15 per step - a 0.67 s cycle**.
+//
+// Four times apart. The tie-breaker is *what the player's own model is drawn with*: the game draws
+// `objPlayer` from `sprite_index 0` advanced by its instance `image_speed`, and that instance speed
+// is **0.60**. The index the wire carries is therefore **not** the counter the model is drawn from
+// (0.15/step ≠ 0.60/step), which is consistent with everything else learned about it - it is a
+// free-running animation clock, not the sprite's own frame. So **the drawn rate wins: 0.60 frames
+// per step**, converted to the draw handler's millisecond clock at 60 steps a second:
+// `0.60 / 16.667 = 0.036 units/ms`. The measured index rise stays as the fallback for a peer whose
+// instance speed could not be read.
+//
+// This is the same rule the `/2` and `4.76 px` rounds earned: **when two numbers about one thing
+// disagree, measure the thing the eye sees, do not average the numbers.**
+var _IDLE_UNITS = global.coopPeerImageSpeed / 16.667;   // frames per ms, from the game's own speed
+if (_IDLE_UNITS <= 0.0005) _IDLE_UNITS = 0.009;         // fallback: the measured index rise
 if (_walking) {
     var _ppu = 12.2;                  // px per index-unit, from the idx probe's walking samples
     global.coopPeerFrameF += global.coopPeerSpeed * _dt / _ppu;
@@ -242,12 +255,11 @@ if (_walking) {
     if (global.coopPeerFrameF >= _cyc) global.coopPeerFrameF = global.coopPeerFrameF mod _cyc;
     if (global.coopPeerFrameF < 0) global.coopPeerFrameF = 0;
 } else if (_idle_anim) {
-    // A real idle body: play its bob at the measured animation rate.
-    var _idle_n = _spr > 0 ? sprite_get_number(_spr) : 1;
+    // The idle body's bob. `_spr` is **0** here (that is `sprPlayerIdle`), so a `> 0` guard would
+    // turn the bob off - the exact regression the owner reported. `sprite_get_number` takes 0 fine.
+    var _idle_n = sprite_get_number(_spr);
     if (_idle_n < 1) _idle_n = 1;
-    var _idle_units = global.coopPeerStepRate;      // units per millisecond
-    if (_idle_units <= 0.0005) _idle_units = 0.009; // 9 units/s: the live idle/walk index rate
-    global.coopIdleFrameF += _idle_units * _dt;
+    global.coopIdleFrameF += _IDLE_UNITS * _dt;
     if (global.coopIdleFrameF >= _idle_n) global.coopIdleFrameF = global.coopIdleFrameF mod _idle_n;
     if (global.coopIdleFrameF < 0) global.coopIdleFrameF = 0;
 } else {
@@ -268,7 +280,7 @@ if (_walking) {
 // vanish for part of every cycle. Where the sprite is known, its own count decides; the constant
 // is the fallback for a sprite that cannot be asked about.
 var _last = global.coopStepMax;
-if (_spr > 0) {
+if (_spr >= 0) {
     var _nf = sprite_get_number(_spr);
     if (_nf > 0) _last = _nf - 1;
 }
@@ -285,7 +297,7 @@ if (_frame > _last) _frame = _last;
 // to land somewhere sensible.
 var _h  = 24;
 var _yo = 24;
-if (_spr > 0) {
+if (_spr >= 0) {
     _h  = sprite_get_height(_spr);
     _yo = sprite_get_yoffset(_spr);
 }
@@ -322,7 +334,12 @@ var _draw_angle = global.coopPeer.angle + _roll_angle;
 // dust. The owner's report read as "the mob is still not there" and the real symptom was
 // "nothing is drawn any more". The flag is read once at the top of the handler now, so the
 // frame, the sprite choice and the dust all share the one read.
-if (_spr > 0) {
+// **`>= 0`, not `> 0`.** This is the line the whole round turns on: the idle body is
+// `sprPlayerIdle`, **asset id 0**, so `> 0` here would draw *nothing* while the peer stood still -
+// which is exactly what the owner reported after the previous round ("the mock stopped using the
+// bob while standing"). `sprite_exists` was true for id 0 and the name at 0 is `'sprPlayerIdle'`
+// (both live, 2026-10-22), so sprite 0 is a real sprite in this build and draws like any other.
+if (_spr >= 0) {
     draw_sprite_ext(_spr, _frame, _x, _yd, _face, 1, _draw_angle, c_white, 0.85);
 }
 

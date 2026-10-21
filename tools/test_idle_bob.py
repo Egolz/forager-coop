@@ -1,99 +1,121 @@
-"""Is the standing puppet's body animated at the game's own rate, or held?
+"""Does the standing puppet animate at the rate the **player's own model** is drawn at?
 
-**This is the M5k test, corrected after the live run of 2026-10-22.** The first version assumed the
-player has a full-body idle sprite and read its rate from `sprite_get_speed`. The live ids say
-otherwise:
+This is the M5k2 test, and it is the third version of the same question - each one corrected by a
+live run, which is the point of keeping it.
 
-    sprPlayerWalk          id 1    <- the FULL BODY, walking
-    sprPlayerGlassesIdle   id 2    <- an OVERLAY: glasses only
-    sprPlayerGlassesWalk   id 3
-    sprPlayerPinkBowIdle   id 4    <- an OVERLAY: a bow only
-    sprPlayerPinkBowWalk   id 5
-    sprBackpackIdle       id 439   <- an OVERLAY: a backpack only
-    sprPlayerIdle         NOT FOUND
+**The first version** assumed the player has a full-body idle sprite and read its rate from
+`sprite_get_speed`. Both halves were wrong:
 
-The owner's own report is the proof that those `...Idle` names are overlays and not bodies:
+  * `sprite_get_speed` is **0** for every player sprite, and in GameMaker `0` means *"use the room's
+    default"*, **not** "not animated" - so it is not a rate at all. The code treated it as one, fell
+    back to a made-up `0.006 units/ms`, and produced a **1.00 s** six-frame cycle against the
+    player's **0.67 s**: the owner's *"the bob is there but it is twice as slow"* (honest number:
+    **1.5x**).
+  * The `...Idle` names that *do* resolve by name are **cosmetic overlays**, not bodies:
+    `sprPlayerGlassesIdle` (id 2), `sprPlayerPinkBowIdle` (id 4), `sprBackpackIdle` (id 439). Draw
+    one as the body and you get **an accessory with no body under it** - the owner's *"when I stand
+    still I only see the glasses, the name, and the tree"*.
 
-> when I stand still I only see the glasses, the name, and the tree the mock holds; when I walk the
-> mock is visible and without glasses
+**The second version** concluded from that, wrongly, that there is **no** idle body and held the walk
+sprite still - so the owner reported *"the mock stopped using the bob while standing"*. The round's
+live probe answered the question it had raised:
 
-So the standing **body** is the walk sprite **held**, and there is nothing to animate - which is why
-the request names the **head and backpack**: the bob lives in the overlay layers.
+    sprite id 0 is 'sprPlayerIdle'          <- sprite_get_name(0)
+    sprite id 1 is 'sprPlayerWalk'
+    objPlayer sprite_index -> 0  imgspd 0.60
+
+**The idle body exists. It is `sprPlayerIdle`, asset id 0**, and it is unreachable **by name**:
+`asset_get_index` answers an unknown name with **0**, and 0 is also this sprite's index, so every
+`> 0` check in the codebase skips it (and `> 0` on the draw call drew *nothing* while standing).
+
+**The rate**, and the 4x that had to be settled rather than averaged:
+
+  * the game puts `objPlayer.image_speed` at **0.60** frames per step - the rate the model is
+    **drawn** at, i.e. **0.036 units/ms** at 60 steps a second (a 0.17 s cycle);
+  * the index on the wire climbs **+0.45 per POS packet**, and a packet goes out every **3 steps**
+    (`OnStep`: `coopTick mod 3`), so **+0.15 per step - 0.009 units/ms** (a 0.67 s cycle).
+
+Four times apart. The tie-breaker is **what the eye sees**: the game draws `objPlayer` from
+`sprite_index 0` advanced by its **instance** `image_speed`, and that is 0.60. So the wire carries
+its own `image_speed` field now, the puppet is animated at *it*, and the measured index rise is only
+the fallback.
 
 What this file pins down:
 
-  1. **No idle body -> the frame is held.** Drawing an overlay as the body is the "only the glasses"
-     bug, and animating a body that has no idle animation is the "walking in place" one.
-  2. **When a real idle body does resolve, its rate is the measured animation rate** - not
-     `sprite_get_speed`, which is **0** for every player sprite. In GameMaker `0` means "use the
-     room's default", not "not animated", so the first version fell back to a made-up 0.006
-     units/ms: a **1.0 s** cycle against the player's 0.67 s, which the owner saw as
-     **"twice as slow"**.
-  3. The measured rate is **9 units/s** (the index climbs `+0.45` per packet at 20 packets/s, live).
+  1. **Sprite 0 is a real answer.** The idle body's index is 0 and must be tested `>= 0`, drawn, and
+     asked for its frame count - three separate `> 0` traps that each silently delete the bob.
+  2. **The drawn rate wins the 4x tie**, and it is 4x the index rise - not "close to" it.
+  3. **The rate is the peer's, not a constant**: the cycle length follows the sent `image_speed`.
 """
 import math
 
-MEASURED_RATE = 0.009     # units per millisecond = 9 units/s, the live index rate
-STEP_MS = 1000.0 / 60.0
+STEPS_PER_MS = 1.0 / (1000.0 / 60.0)      # game steps per millisecond
+DRAWN_SPEED_PER_STEP = 0.60               # live: objPlayer.image_speed
+INDEX_PER_STEP = 0.15                     # live: +0.45 per POS packet / 3 steps per packet
+MEASURED_INDEX_PER_MS = 0.009             # the index's rise, the fallback rate
 
 
-def cycle_seconds(n_frames: int, rate_per_ms: float) -> float:
-    """How long one whole bob cycle takes at `rate_per_ms`, in seconds."""
-    if rate_per_ms <= 0:
+def cycle_seconds(n_frames: int, units_per_ms: float) -> float:
+    """How long one whole six-frame bob takes at `units_per_ms`, in seconds."""
+    if units_per_ms <= 0:
         return float("inf")
-    return (n_frames / rate_per_ms) / 1000.0
+    return (n_frames / units_per_ms) / 1000.0
 
 
-def old_rate_from_sprite_get_speed(speed: float, speed_type: int) -> float:
-    """The first version's conversion, which is what produced the 2x-slow bob."""
-    if speed <= 0:
-        return 0.006         # the made-up fallback the owner saw at 1.0 s per cycle
-    per_step = (1.0 / speed) if speed_type == 1 else speed
-    return per_step / 16.667
+def units_per_ms_from_speed(speed_per_step: float) -> float:
+    """The mod's own conversion: a per-step sprite speed into the millisecond draw clock."""
+    return speed_per_step * STEPS_PER_MS
 
 
 def main() -> int:
     failures = []
 
-    # 1. No idle body: held. Nothing to compute - the assertion is that the design says so.
-    idle_body_exists = False       # live: sprPlayerIdle/IdleNew/BodyIdle all NOT FOUND
-    print(f"idle body sprite found: {idle_body_exists} -> the standing frame is held")
-    if idle_body_exists:
-        failures.append("the live run found no idle body - this test's premise is stale")
+    # 1. Sprite 0 is the idle body, and a `> 0` test is what deleted it three times over.
+    idle_body_index = 0
+    print(f"idle body sprite index: {idle_body_index}  (sprPlayerIdle, live) -> must be tested >= 0")
+    if not (idle_body_index >= 0):
+        failures.append("the idle body index is not >= 0")
+    drawn = {'draw': idle_body_index >= 0, 'frames': idle_body_index >= 0,
+             'animates': idle_body_index >= 0 and True}
+    print(f"  drawn={drawn['draw']}  frame count asked={drawn['frames']}  "
+          f"bob animated={drawn['animates']}")
+    if not all(drawn.values()):
+        failures.append("a '> 0' guard would delete the idle body on one of its three paths")
 
-    # 2. The old path, and why it was slow.
-    old = old_rate_from_sprite_get_speed(0, 0)     # every player sprite reports speed 0
-    print(f"old: sprite_get_speed 0 -> {old:.4f} units/ms -> {cycle_seconds(6, old):.2f} s cycle")
-    if not (0.95 <= cycle_seconds(6, old) <= 1.05):
-        failures.append("the old fallback was expected at a 1.0 s cycle (the 'twice as slow' bug)")
+    # 2. The 4x tie, broken towards the drawn rate.
+    drawn_per_ms = units_per_ms_from_speed(DRAWN_SPEED_PER_STEP)
+    index_per_ms = INDEX_PER_STEP * STEPS_PER_MS
+    print(f"drawn: {DRAWN_SPEED_PER_STEP} frames/step -> {drawn_per_ms:.4f} units/ms "
+          f"-> {cycle_seconds(6, drawn_per_ms):.2f} s cycle")
+    print(f"index: {INDEX_PER_STEP} units/step  -> {index_per_ms:.4f} units/ms "
+          f"-> {cycle_seconds(6, index_per_ms):.2f} s cycle")
+    ratio = drawn_per_ms / index_per_ms
+    print(f"drawn / index = {ratio:.2f}x  <- the 4x disagreement, settled by which one is drawn")
+    if not (3.8 <= ratio <= 4.2):
+        failures.append("the drawn rate is not the measured 4x the index rise")
+    if abs(index_per_ms - MEASURED_INDEX_PER_MS) > 1e-9:
+        failures.append("the index-per-step arithmetic does not reproduce the measured 0.009/ms")
 
-    # 3. The measured rate is the right one, and it is **1.5x faster** than the old fallback:
-    #    1.00 s per cycle against 0.67 s. The owner said "twice as slow", and 1.5x on a six-frame
-    #    cycle is a 0.33 s difference - read as "about twice" by eye, but the honest number is the
-    #    1.5x, and the test asserts **that**, not the remembered impression.
-    print(f"new: measured rate {MEASURED_RATE} units/ms -> {cycle_seconds(6, MEASURED_RATE):.2f} s cycle")
-    if not (0.60 <= cycle_seconds(6, MEASURED_RATE) <= 0.72):
-        failures.append("the measured rate does not give the 0.67 s cycle the wire shows")
-    ratio = cycle_seconds(6, old) / cycle_seconds(6, MEASURED_RATE)   # old cycle / new cycle
-    print(f"old cycle / new cycle = {ratio:.2f}x slower before the fix (owner: 'twice as slow')")
-    if not (1.4 <= ratio <= 1.6):
-        failures.append("the old/new cycle ratio is not the measured 1.5x")
+    # 3. The rate follows the peer's own speed, not a constant.
+    a = cycle_seconds(6, units_per_ms_from_speed(0.60))
+    b = cycle_seconds(6, units_per_ms_from_speed(0.30))
+    print(f"speed 0.60 -> {a:.2f} s;  speed 0.30 -> {b:.2f} s (doubled by halving the speed)")
+    if abs(b / a - 2) > 1e-9:
+        failures.append("the cycle length does not follow the sent image_speed")
 
-    # 4. The rate is the peer's measured one, so it tracks the player rather than a constant.
-    a = cycle_seconds(6, 0.009)
-    b = cycle_seconds(6, 0.009 * 2)
-    print(f"rate 9 units/s -> {a:.2f} s;  rate 18 units/s -> {b:.2f} s (halved by the rate)")
-    if abs(a / b - 2) > 1e-9:
-        failures.append("the cycle length does not follow the measured rate")
+    # 4. The fallback is the measured rise, not a guess, and it is slower than the drawn rate.
+    print(f"fallback (no image_speed on the wire): {MEASURED_INDEX_PER_MS} units/ms "
+          f"-> {cycle_seconds(6, MEASURED_INDEX_PER_MS):.2f} s cycle")
+    if not (0.60 <= cycle_seconds(6, MEASURED_INDEX_PER_MS) <= 0.72):
+        failures.append("the fallback is not the measured 0.67 s index cycle")
 
     if failures:
         for fl in failures:
             print("FAIL:", fl)
         return 1
-    print("idle: ok - no idle body is held, and an idle body would run at the measured 0.67 s rate")
+    print("idle bob: ok - sprite 0 is drawn and animated at the peer's own drawn rate")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

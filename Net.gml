@@ -271,78 +271,72 @@ CoopSend(_b);
 // `sprPlayerIdle` and `sprPlayerWalk` and *not* "PlayerIdle" or "Player Walk", so the prefix
 // is part of the name here, unlike in a stock GameMaker project.
 //
-// **`0` means "not found" in this build, not -1.** Asking for the wrong name returned 0, and
-// the chain of candidates stopped there, so the puppet was never drawn - the owner saw "the
-// mock did not spawn", with no error anywhere. A sprite index of 0 is the "no sprite" value,
-// so it is useless to draw and must not be mistaken for a hit.
+// **`0` means "not found" for `asset_get_index` - but 0 is also `sprPlayerIdle`'s own id, and that
+// is the trap this whole round is about** (live, 2026-10-22: `sprite id 0 is 'sprPlayerIdle'`,
+// `objPlayer sprite_index -> 0`). So the name lookup cannot be used for the idle body at all; the
+// body is asked for **by identity** first, exactly as `CoopResolveIdleSprite` does, and only then
+// by name for a build where the idle sits elsewhere.
 if (!global.coopBodyTried) {
     global.coopBodyTried = true;
-    global.coopBodySprite = asset_get_index("sprPlayerIdle");
-    if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("sprPlayerWalk");
-    if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("PlayerIdle");
-    if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("Player Idle");
+    if (sprite_exists(0) && sprite_get_name(0) == "sprPlayerIdle") {
+        global.coopBodySprite = 0;
+    } else {
+        global.coopBodySprite = asset_get_index("sprPlayerIdle");
+        if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("sprPlayerWalk");
+        if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("PlayerIdle");
+        if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("Player Idle");
+    }
 }
 
 #define CoopResolveIdleSprite()
-// -> the asset index of the sprite to draw for a **standing** peer, or -1, cached in
-// `global.coopIdleSprite`. `-2` means "there is no separate idle body: use the walk sprite, held".
+// -> the asset index of the player's **idle body** sprite, or -1, cached in `global.coopIdleSprite`.
 //
-// **This is the owner's request in M5k:** "the head and backpack bob while standing still - find
-// that animation and pick up its speed." The Forager modding docs say the player is drawn as four
-// stacked cosmetic layers - **Wing -> Backpacks -> Body -> Head** - and every cosmetic is made with
-// its own pair:
+// **This is `sprPlayerIdle`, and it is asset id 0 - confirmed live, 2026-10-22:**
 //
-//     CosmeticCreate(undefined, "beet", CosmeticType.Body, sprBeetIdle, sprBeetWalk, ...)
+//     sprite id 0 is 'sprPlayerIdle'          <- sprite_get_name(0)
+//     sprite id 1 is 'sprPlayerWalk'
+//     objPlayer sprite_index -> 0  imgspd 0.60
 //
-// **The live ids say what those layers actually are, and the first version of this resolver read
-// them wrong.** The run of 2026-10-22 returned, in order:
+// So the plain body idle **does** exist; it is simply **unreachable by name**. `asset_get_index`
+// answers an unknown name with **0**, and 0 is also the index of this sprite - the two are
+// indistinguishable through that call, which is why every check in this codebase is `> 0` and why
+// the body resolver never found it and fell through to `sprPlayerWalk`.
 //
-//     sprPlayerWalk          id 1    <- the FULL BODY, walking
-//     sprPlayerGlassesIdle   id 2    <- an OVERLAY: glasses only
-//     sprPlayerGlassesWalk   id 3
-//     sprPlayerPinkBowIdle   id 4    <- an OVERLAY: a bow only
-//     sprPlayerPinkBowWalk   id 5
-//     sprBackpackIdle       id 439   <- an OVERLAY: a backpack only
-//     sprPlayerIdle         NOT FOUND
-//     sprPlayerIdleNew      NOT FOUND
-//     sprBodyIdle           NOT FOUND
+// **The `...Idle` names that DO resolve by name are cosmetics overlays, not bodies** - that is what
+// the previous round got wrong, and the owner's report was the proof:
 //
-// The resolver walked that list in order and stopped at the first hit, which was
-// `sprPlayerGlassesIdle` - and the owner saw exactly that: **"when I stand still I only see the
-// glasses, the name, and the tree the mock holds; when I walk the mock is visible and without
-// glasses."** So these `...Idle` names are **overlays, not bodies**: drawing one as the body draws
-// the accessory with no body under it.
+//     sprPlayerGlassesIdle  id 2   <- an overlay: glasses only
+//     sprPlayerPinkBowIdle  id 4   <- an overlay: a bow only
+//     sprBackpackIdle      id 439  <- an overlay: a backpack only
 //
-// **The ids are sequential from 1, which is the clue that settles `sprPlayerIdle`.** `sprPlayerWalk`
-// is **1**, so a plain `sprPlayerIdle` sitting next to it would be id **0** - and
-// `asset_get_index("sprPlayerIdle")` returns **0** both for "asset number 0" and for "no such
-// name". The two answers are indistinguishable through that call, which is why every check in this
-// file is `> 0` and why id 0 was never examined. A sprite at id 0 cannot be drawn anyway -
-// `draw_sprite_ext(0, ...)` is GameMaker's "no sprite" - so even if it is the idle body, the game
-// cannot be drawing it through the ordinary path.
+// drawn as a "body", `sprPlayerGlassesIdle` shows **glasses with no body under them** - exactly the
+// owner's "when I stand still I only see the glasses, the name, and the tree".
 //
-// **So the honest conclusion is that there is no separate idle *body*, and the standing pose is the
-// walk sprite held on its standing frame.** The bob the owner sees on their own model lives in the
-// **overlay** layers (`sprBackpackIdle`, and the head cosmetic), not in the body - which is why the
-// request names the head and the backpack and not the legs. `-2` is returned for that case, and the
-// draw handler holds the walk sprite still rather than animating a body that has no idle animation.
+// **The order is therefore: sprite 0 first, by identity, and only then the named candidates.** The
+// check is `sprite_exists(0)` and the **name** at 0, never `> 0`, because `> 0` is precisely the
+// test that cannot see this sprite.
 if (!global.coopIdleTried) {
     global.coopIdleTried = true;
-    // Only a **body** name counts. The overlay names are deliberately **not** in this list any
-    // more: they are what produced "only the glasses".
-    var _ic = ["sprPlayerIdle", "sprPlayerIdleNew", "sprBodyIdle"];
-    for (var _ii = 0; _ii < array_length(_ic); _ii++) {
-        var _iv = asset_get_index(_ic[_ii]);
-        if (_iv > 0) {
-            global.coopIdleSprite = _iv;
-            break;
+    // Sprite 0 is the idle body **when its name says so**. `sprite_exists` guards the read: asking
+    // for the name of a sprite that is not there would be a crash, not a miss.
+    if (sprite_exists(0) && sprite_get_name(0) == "sprPlayerIdle") {
+        global.coopIdleSprite = 0;
+    } else {
+        // A named fallback for a build where the idle is somewhere else. **Body names only** - the
+        // overlay names are deliberately absent, because they are what produced "only the glasses".
+        var _ic = ["sprPlayerIdle", "sprPlayerIdleNew", "sprBodyIdle"];
+        for (var _ii = 0; _ii < array_length(_ic); _ii++) {
+            var _iv = asset_get_index(_ic[_ii]);
+            if (_iv > 0) {
+                global.coopIdleSprite = _iv;
+                break;
+            }
         }
     }
-    if (global.coopIdleSprite <= 0) global.coopIdleSprite = -2;   // no idle body: hold the walk
 }
-if (global.coopIdleSprite == -2) return -1;   // "draw the walk sprite, held" - see the caller
-if (global.coopIdleSprite > 0) return global.coopIdleSprite;
-return -1;
+// **0 is a real answer here, not a failure** - that is the whole point of this function. The caller
+// tests `>= 0` and draws sprite 0 like any other, because in this build `0` is `sprPlayerIdle`.
+return global.coopIdleSprite;
 
 #define CoopResolvePeerSprite(_name)
 // -> the asset index of the sprite the peer asked for, or -1.
@@ -361,17 +355,18 @@ if (_name == "walk") {
     if (global.coopWalkSprite > 0) return global.coopWalkSprite;
 }
 if (_name == "idle") {
-    // **The idle is its own sprite** (M5k), not the body: the body sprite ends up being the walk
-    // sprite, and drawing a walk with a standing frame is exactly the "walks in place" the owner
-    // reported. The idle pair is resolved separately - see CoopResolveIdleSprite.
+    // **The idle is `sprPlayerIdle` - asset id 0** (live, 2026-10-22), so this must test `>= 0`:
+    // `> 0` would throw the idle body away and the puppet would fall back to the walk sprite while
+    // standing, which is the "walks in place" report. The idle pair is resolved separately - see
+    // CoopResolveIdleSprite.
     CoopResolveIdleSprite();
-    if (global.coopIdleSprite > 0) return global.coopIdleSprite;
+    if (global.coopIdleSprite >= 0) return global.coopIdleSprite;
     CoopResolveBodySprite();
-    if (global.coopBodySprite > 0) return global.coopBodySprite;
+    if (global.coopBodySprite >= 0) return global.coopBodySprite;
 }
 // An unknown or empty name: the peer's own body sprite stands in, exactly as before.
 CoopResolveBodySprite();
-if (global.coopBodySprite > 0) return global.coopBodySprite;
+if (global.coopBodySprite >= 0) return global.coopBodySprite;
 return -1;
 
 #define CoopStandSpot(_x, _y, _mode)
@@ -505,6 +500,17 @@ buffer_write(_b, buffer_string, global.coopLastMoved ? "walk" : "idle");
 // interpolated frame is what put the puppet a packet behind the player (the owner, live:
 // "the puppet's walk animation is lagging").
 buffer_write(_b, buffer_u16, floor(abs(objPlayer.image_index) * 100) mod 65535);
+// **The instance's own animation speed, in hundredths** (M5k1, 2026-10-22).
+//
+// The idle bob has to run at the rate the **player's own model** is drawn at, and that rate is this
+// number: live, `objPlayer.image_speed` is **0.60** - 0.60 of a frame per game step. It is sent
+// rather than assumed, because the number is a property of the build and the equipped cosmetics,
+// and because it **disagrees by 4x** with the index two fields above (see the draw handler). With
+// the sender's own speed on the wire, the far end animates the puppet at the speed the player's
+// model is drawn at, instead of at a constant that happens to be close.
+//
+// It is sent as `floor(speed * 100)`, so 0.60 arrives as 60 and the reader divides by 100.
+buffer_write(_b, buffer_u16, floor(abs(objPlayer.image_speed) * 100) mod 65535);
 // **Is `objPlayer.image_index` really the walk clock?** Measured live (M5i, 2026-10-22), and the
 // answer decides what the puppet should be animated by.
 //
@@ -1959,9 +1965,19 @@ var _pe_sprs = ["sprPlayerIdle", "sprPlayerWalk", "sprPlayerGlassesIdle",
 // and is simply unreachable by name.
 array_push(_pe_lines, "sprite id 0 is '" + sprite_get_name(0) + "'");
 array_push(_pe_lines, "sprite id 1 is '" + sprite_get_name(1) + "'");
+// **Can sprite 0 be drawn?** In old GameMaker `0` meant "no sprite", but that is `-1` in modern
+// builds and sprite 0 is a real sprite - `sprite_get_name(0)` is `'sprPlayerIdle'` live, and the
+// game itself draws the player with `objPlayer.sprite_index = 0`. `sprite_exists` / frame count /
+// size answer whether it is usable rather than assuming either way.
+array_push(_pe_lines, "sprite 0: exists " + string(sprite_exists(0))
+           + " frames " + string(sprite_get_number(0))
+           + " w " + string(sprite_get_width(0))
+           + " h " + string(sprite_get_height(0))
+           + " yoff " + string(sprite_get_yoffset(0)));
 if (instance_exists(objPlayer)) {
     array_push(_pe_lines, "objPlayer sprite_index -> " + string(objPlayer.sprite_index)
-               + " imgspd " + string(objPlayer.image_speed));
+               + " imgspd " + string(objPlayer.image_speed)
+               + " imgidx " + string(floor(objPlayer.image_index * 100) / 100));
 }
 for (var _pe_s = 0; _pe_s < array_length(_pe_sprs); _pe_s++) {
     var _pe_sn = _pe_sprs[_pe_s];
@@ -2361,6 +2377,10 @@ switch (_cmd) {
         // **two** of its ticks (`PLAYER_WALK_SPEED = SPAWN_ANIM_SPEED * 2`, both measured -
         // see CoopSendPos). So the step is `index / 2`, and the reset to 0 is the roll.
         var _ps_index = buffer_read(_buf, buffer_u16) / 100;
+        // **The instance's own animation speed** (M5k1, 2026-10-22), in hundredths, sent right after
+        // the index - see CoopSendPos for why the field exists and why it disagrees with the index
+        // by 4x. This is the rate the player's model is actually drawn at, and the idle bob uses it.
+        global.coopPeerImageSpeed = buffer_read(_buf, buffer_u16) / 100;
         global.coopPeer.room   = buffer_read(_buf, buffer_u8);
         global.coopPeerHold    = buffer_read(_buf, buffer_u16);
         global.coopPeer.seen   = true;

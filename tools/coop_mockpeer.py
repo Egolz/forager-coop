@@ -23,7 +23,9 @@ Mod packets (little-endian; GameMaker buffer_string = UTF-8 + NUL):
     4  PING             u32 nonce
     5  PONG             u32 nonce
     6  POS              s32 x, s32 y, u16 angle, s8 facing, string sprite, u16 frame,
-                       u8 room, u16 hold   (frame = hundredths of the game index, protocol 9)
+                       u16 image_speed, u8 room, u16 hold
+                       (frame = hundredths of the game index since protocol 9;
+                        image_speed = hundredths of a frame per step since protocol 10)
     7  BYE              string reason
     8  INTENT_PLACE     u32 intentId, u8 room, s32 x, s32 y, string structureName
     9  MUTATION_PLACE   u32 seq, u32 intentId, u8 room, s32 x, s32 y, s32 depth, string name
@@ -200,7 +202,8 @@ def pong(nonce: int) -> bytes:
 
 
 def pos(x: int, y: int, angle: int = 0, facing: int = 1,
-        sprite: str = "", index: float = 0.0, room: int = 0, hold: int = 65535) -> bytes:
+        sprite: str = "", index: float = 0.0, room: int = 0, hold: int = 65535,
+        image_speed: float = 0.6) -> bytes:
     """The peer's position (packet 6).
 
     The sprite travels **by name** ("idle" / "walk") since protocol 7: only a real game can
@@ -220,10 +223,17 @@ def pos(x: int, y: int, angle: int = 0, facing: int = 1,
     at the game's own rate (`+0.15` a tick), so sending a raw index is what makes the mock's
     packets indistinguishable from the game's - and a mock that reports a different rate tells
     the puppet the wrong thing while every test still passes.
+
+    **Protocol 10 adds the instance's `image_speed`** (hundredths of a frame per game step),
+    right after the frame. The game's own `objPlayer.image_speed` is **0.60** (live,
+    2026-10-22), and the client plays the idle bob at that rate - so the mock sends it too, and
+    a mock that omitted it would make the puppet's bob run at the fallback rate while every
+    test still passed. That is the same trap the frame comment above describes, twice over.
     """
     return (bytes([POS]) + struct.pack("<iih", x, y, angle)
             + struct.pack("<b", facing) + p_str(sprite)
-            + struct.pack("<HBH", int(round(index * 100)) & 0xFFFF, room, hold))
+            + struct.pack("<HHBH", int(round(index * 100)) & 0xFFFF,
+                          int(round(image_speed * 100)) & 0xFFFF, room, hold))
 
 
 def intent_place(intent_id: int, room: int, x: int, y: int, name: str) -> bytes:
@@ -365,9 +375,10 @@ def parse_one(buf: bytes):
         (nonce,) = struct.unpack("<I", buf[1:5])
         return {"cmd": cmd, "name": NAMES[cmd], "nonce": nonce}, 5
     if cmd == POS:
-        # cmd | s32 x | s32 y | u16 angle | s8 facing | string sprite | u16 frame | u8 room | u16 hold
-        #                                  (frame in HUNDREDTHS since protocol 9)
-        if len(buf) < 18:
+        # cmd | s32 x | s32 y | u16 angle | s8 facing | string sprite | u16 frame |
+        # u16 image_speed | u8 room | u16 hold
+        #   (frame in HUNDREDTHS since protocol 9; image_speed in HUNDREDTHS since protocol 10)
+        if len(buf) < 19:
             return None, 0
         x, y, angle = struct.unpack("<iih", buf[1:11])
         (facing,) = struct.unpack("<b", buf[11:12])
@@ -375,14 +386,14 @@ def parse_one(buf: bytes):
         if s is None:
             return None, 0
         sprite, i = s
-        if i + 4 > len(buf):
+        if i + 7 > len(buf):
             return None, 0
-        image, room, hold = struct.unpack("<HBH", buf[i:i + 5])
-        i += 5
+        image, image_speed, room, hold = struct.unpack("<HHBH", buf[i:i + 7])
+        i += 7
         return {"cmd": cmd, "name": NAMES[cmd], "x": x, "y": y, "angle": angle,
                 "facing": facing, "sprite": sprite, "image": image / 100,
-                "image_raw": image, "room": room,
-                "hold": hold}, i
+                "image_raw": image, "image_speed": image_speed / 100,
+                "room": room, "hold": hold}, i
     if cmd in (REJECT, BYE):
         s = _read_str(buf, 1)
         if s is None:
@@ -535,7 +546,8 @@ def describe(pkt: dict) -> str:
     if name == "POS":
         return (f"POS x={pkt['x']} y={pkt['y']} angle={pkt['angle']} "
                 f"facing={pkt['facing']} sprite={pkt['sprite']!r} "
-                f"frame={pkt['image']} room={pkt['room']} hold={pkt['hold']}")
+                f"frame={pkt['image']} ispd={pkt['image_speed']} "
+                f"room={pkt['room']} hold={pkt['hold']}")
     if name == "MUTATION_PLACE":
         return (f"MUTATION seq={pkt['seq']} intent=#{pkt['intentId']} room={pkt['room']} "
                 f"'{pkt['structure']}' at {pkt['x']},{pkt['y']} depth {pkt['depth']}")
@@ -912,7 +924,8 @@ class Peer:
                 # which frame of the walk cycle the player is on - and the log is the only
                 # place that can answer it from the outside.
                 log(f"   pos {pkt['x']},{pkt['y']} room {pkt['room']}"
-                    f" facing {pkt['facing']} angle {pkt['angle']} frame {pkt['image']:.2f}")
+                    f" facing {pkt['facing']} angle {pkt['angle']} frame {pkt['image']:.2f} "
+                    f"ispd {pkt['image_speed']:.2f}")
         elif name == "DEBUG_LINE":
             # The mod's own console, forwarded: this game's mods cannot write
             # files, so a long dump arrives here and we write it down.
@@ -1057,6 +1070,12 @@ class Peer:
         # real `objPlayer.image_index` climbs `0.00 0.15 0.30 … 5.85 0.00`, so the mock
         # sends the same shape: a fractional frame in a cycle of six, advancing 0.15 per
         # game frame - which is what lets the client's interpolation be tested honestly.
+        #
+        # **This is the *index*, and it is not the rate the model is drawn at** (protocol 10).
+        # The game draws `objPlayer` at its instance `image_speed`, live **0.60** frames per
+        # step - four times the 0.15 the index climbs - and `pos()` sends that as its own
+        # field. Keeping both, in the game's own relationship, is what makes the mock's
+        # packets indistinguishable from the game's.
         if self.moving:
             self.frame = (self.frame + 0.15) % 6.0
         else:

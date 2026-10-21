@@ -16,6 +16,14 @@ if (keyboard_check_pressed(vk_f12)) CoopProbeSpot();
 if (keyboard_check_pressed(vk_f4)) CoopProbeLand();
 if (keyboard_check_pressed(vk_f2)) CoopProbeLand();
 if (keyboard_check_pressed(vk_f3)) CoopProbeItems();
+// **The enemy-API probe runs by itself, once per loaded world** (2026-10-22). It needs no key
+// press because it must be readable: its lines go to the mock through `CoopSendDebugLine`, and
+// a human pressing a key is not a test plan. F1 re-runs it on demand.
+if (!global.coopEnemyProbed && instance_exists(objPlayer) && global.coopPeerAlive) {
+    global.coopEnemyProbed = true;
+    CoopProbeEnemy();
+}
+if (keyboard_check_pressed(vk_f1)) CoopProbeEnemy();
 
 // ---------------------------------------------------------------------------
 // **Save & quit: end the session here, before the world unloads.**
@@ -287,8 +295,14 @@ if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
 //
 // That is also the shape the rest of the mod already uses for plants (see the bush census
 // above), so there is one way of noticing something disappear, not three.
-if (global.coopMobCensus < 2 && instance_exists(objPlayer)) {
-    global.coopMobCensus += 1;
+//
+// **The diff must run every step, and it did not.** `global.coopMobCensus < 2` made it a
+// **one-shot**: it compared step 1 with step 2 and then never ran again - so it could not
+// report a slime killed a minute later, and it could not even report the world's contents,
+// which is why the owner's log had **no census line at all** and "the slime is still not
+// there". A diff of *this step against the last* has to be taken every step by definition;
+// the throttle belongs on the *log line*, not on the comparison.
+if (instance_exists(objPlayer)) {
     var _wlk_ids = [];
     var _wlk_obj = [];
     var _wlk_x   = [];

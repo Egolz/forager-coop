@@ -1755,6 +1755,59 @@ if (global.coopSocket < 0) {
     Trace("Co-op: probe: no peer connected - the table half was dropped (only the lines above exist).");
 }
 
+#define CoopProbeEnemy()
+// F1. **What is the modding API's own way to spawn an enemy, and what does it want?**
+//
+// The owner asked for a slime, and that is a **spawn**, not a search - so this is the question
+// the whole M3.5 effort should have started from. The build has a *first-party* spawn API: its
+// symbol table names `ModEnemySpawn`, `EnemyCreate`, `EnemyGet`, `EnemySetType`,
+// `ModObjectSpawn` and `objSlime` itself. None of their signatures are recorded in this repo,
+// and guessing a signature is exactly the mistake that has cost several rounds already.
+//
+// So the probe **asks the loader**. Its arity errors are exact and cheap to read - that is how
+// `sprite_get_yoffset`'s one-argument shape was learned in this build - and a call made with
+// the **wrong number of arguments cannot spawn anything**, which is what makes this safe to
+// run in a live world.
+//
+// It also reports what the slime-related names **resolve** to. `asset_get_index` answers an
+// unknown name with **0**, and 0 is a real object, so "did it resolve" is asked as `> 0` and
+// printed with the name beside the number.
+var _pe_lines = [];
+array_push(_pe_lines, "=== enemy api probe begin " + global.coopVersion + " ===");
+
+if (!instance_exists(objPlayer)) {
+    Trace("Co-op: F1 needs a loaded world.");
+    exit;
+}
+
+var _pe_names = ["objSlime", "objSlimeKing", "parEnemy", "objModEnemy", "objSummonSkeleton",
+                 "objSlimePortal"];
+array_push(_pe_lines, "player room " + string(objPlayer.room));
+for (var _pe_i = 0; _pe_i < array_length(_pe_names); _pe_i++) {
+    var _pe_nm = _pe_names[_pe_i];
+    var _pe_idx = asset_get_index(_pe_nm);
+    var _pe_line = "asset '" + _pe_nm + "' -> " + string(_pe_idx);
+    if (_pe_idx > 0) _pe_line += " '" + object_get_name(_pe_idx) + "'";
+    else             _pe_line += " (NOT FOUND)";
+    array_push(_pe_lines, _pe_line);
+}
+
+// The arity of each spawn call, asked with **too few arguments**. The loader's message names
+// the parameter count it wants, and a short call cannot create anything.
+array_push(_pe_lines, "--- arity: each call below is deliberately short ---");
+array_push(_pe_lines, "calling ModEnemySpawn() with none");
+ModEnemySpawn();
+array_push(_pe_lines, "calling EnemyCreate() with none");
+EnemyCreate();
+array_push(_pe_lines, "calling ModObjectSpawn() with none");
+ModObjectSpawn();
+
+for (var _pe_l = 0; _pe_l < array_length(_pe_lines); _pe_l++) {
+    Trace(_pe_lines[_pe_l]);
+    CoopSendDebugLine(_pe_lines[_pe_l]);
+}
+Trace("=== enemy api probe end ===");
+
 #define CoopProbeApi()
 // F11. Can a mod ask the game where water is? This is the question the M2.1 test
 // raised: a client's intent is checked for who asked and how far, never for
@@ -2119,18 +2172,37 @@ switch (_cmd) {
         global.coopPeerPrevAt = _ps_now;
         // **The peer's animation step, and the roll.**
         //
-        // The walk is one *sprite step* per **two** ticks of the game's index
-        // (`PLAYER_WALK_SPEED = SPAWN_ANIM_SPEED * 2`, both measured in this build), so the
-        // step is `index / 2` and it is used **as sent** - no interpolation. Interpolating it
-        // is what put the puppet a packet behind the player: the owner saw the walk animation
-        // lagging (live, 2026-10-22).
-        var _ps_step = _ps_index / 2;
-        // **The roll is the index being reset.** The game's own roll drives the index straight
-        // back to 0 from wherever it was, and the player covers three cells while it happens.
-        // That reset is the only mark of a roll on the wire, so it is what the puppet spins
-        // for: a fall from a real value to nearly zero, spread over about a quarter of a
-        // second - which is the roll's own duration.
-        if (global.coopPeerStep > 1.2 && _ps_step < 0.5 && global.coopPeerRepeat > 0) {
+        // The step **is the index**: measured on the wire, one index-unit is 4.76 px of
+        // walking and the cycle is six units (see the draw handler for the full arithmetic).
+        // No division, no local cycle, no interpolation - all three were tried and each one
+        // put the puppet a fixed distance off the player's own walk.
+        var _ps_step = _ps_index;
+        // **The roll is the index being reset - but a walk cycle *also* wraps, and telling
+        // those apart is the whole bug (measured live, 2026-10-22).** The owner saw the
+        // puppet "sometimes turn diagonally", and the wire log says why:
+        //
+        //     frame 4.20 4.65 5.10 5.55 0.00 0.45      <- an ordinary walk cycle
+        //     step  2.10 2.32 2.55 2.77 0.00 0.22
+        //
+        // The index wraps `5.55 -> 0.00` **every cycle** - about ten times a second while
+        // walking - so "it fell from a real value to near zero" fired on **every step**, and
+        // the puppet was spun ten times a second and caught at a random angle. That is the
+        // diagonal puppet: not a turn the game made, but a spin this mod started.
+        //
+        // A real roll is not a wrap; it is a **discontinuity while the player is moving
+        // fast**: the player travels about three cells in a quarter of a second and the index
+        // jumps back regardless of where it was. So the trigger is the **distance covered
+        // between packets** - which the packet handler already measures as
+        // `global.coopPeerSpeed` - together with an index that did **not** simply run off the
+        // end of its cycle. A wrap is only a wrap when the step was near the top of the
+        // cycle; anything lower that resets is the game doing something else.
+        var _ps_fast = (global.coopPeerSpeed > 0.20);      // px/ms: a roll, not a walk
+        if (_ps_fast
+            && global.coopPeerStep > 1.2
+            && _ps_step < 0.5
+            && global.coopPeerStep < global.coopStepMax - 0.5) {
+            // Not a cycle wrap (which would have come from the **top** of the cycle): a real
+            // reset from the middle. That is the roll.
             global.coopRollSpin = 0.25;      // seconds left of the spin
             global.coopRollStep = 0.25;
         }

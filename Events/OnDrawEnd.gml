@@ -147,20 +147,27 @@ if (_face == 0) _face = 1;
 // **The animation (M3.4, measured 2026-10-22).** The frame is the peer's own, as sent - there
 // is nothing to run locally.
 //
-// Three measurements, each from the owner's own wire log or a probe:
+// **The arithmetic, from two numbers in the owner's own wire log - and it is `floor(index)`,
+// with no division at all.** The earlier "over two ticks" came from a wrong pairing of the
+// constants, and the owner's report ("the animation was better before") is what sent this
+// back to the numbers:
 //
-//  * `image_index` is a **timer**, not an integer: `0.00 0.15 0.30 … 5.85 0.00`.
-//  * One sprite step per **two** of its ticks: 15 px of walking moved it 3.15, and
-//    `PLAYER_WALK_SPEED 90 / SPAWN_ANIM_SPEED 4 = 22.5` - the frame and the walk are driven
-//    by the same speed constant, so **step 2k of the walk is frame k of the sprite**.
-//  * The cycle is **six** frames: the index runs `0.00 … 5.85` before wrapping, and the
-//    player covers six steps - about 34 px - between rolls.
+//  * **15 px of walking moved the index 3.15** - so one index-unit is 15 / 3.15 = **4.76 px**.
+//  * `PLAYER_WALK_SPEED 90 px/s`, and the index moves 3.15 per 15 px, so the index runs at
+//    90 / 4.76 = **18.9 units per second** - which is the walk constant divided by the step
+//    the log measures, not by `SPAWN_ANIM_SPEED 4` (that pairing gave 22.5 and is what was
+//    wrong).
+//  * The index runs `0.00 … 5.85 -> 0.00`, so the cycle is **six index-units**.
 //
-// **What each earlier version got wrong**, so it is not tried again: sending an integer threw
-// the timer away and stuttered; running a *local cycle* of twelve frames made the puppet walk
-// at half the player's rate (the owner: "the puppet's walk animation is lagging"); and
-// **interpolating** the frame carried it a packet behind the player, which is a lag no amount
-// of smoothing hides.
+// Six units a cycle at 4.76 px each is 28.6 px of walking per sprite cycle, i.e. **0.32 s** at
+// 90 px/s - an ordinary walk cycle. Dividing by two made the sprite take twelve units, 57 px
+// and 0.63 s per cycle: **half rate**, which is exactly what the owner saw after the last
+// change. So the sprite frame **is** the index, and the cycle is six.
+//
+// **What each earlier version got wrong**, so it is not tried a fourth time: sending an
+// integer threw the timer away and stuttered; running a *local cycle* of twelve frames made
+// the puppet walk at half the player's rate; a **division by two** did the same; and
+// **interpolating** the frame carried it a packet behind the player.
 var _frame = floor(global.coopPeerStep);
 if (_frame < 0) _frame = 0;
 if (_frame > global.coopStepMax) _frame = global.coopStepMax;
@@ -237,12 +244,18 @@ if (_spr > 0) {
 if (_walking) {
     if (global.coopDustSprite <= 0) {
         global.coopDustSprite = asset_get_index("sprDust");
-        // **How many frames the puff has.** There is no `sprite_get_num_subimages` in this
-        // build, and a wrong guess is invisible rather than fatal: a frame past the end draws
-        // nothing, so the counter is clamped below and the alpha is low. Four is the honest
-        // guess for a puff, and `sprDust` is small.
-        global.coopDustFrames = 4;
-        if (global.coopDustSprite <= 0) global.coopDustFrames = 0;
+        // **How many frames the puff has - asked, not guessed.** `sprite_get_number(name)`
+        // is the standard call for a sprite's sub-image count and it resolves in this build.
+        // The guess of four that stood here before was a guess, and a guess that is *wrong
+        // in the high direction draws nothing*: a frame past the end of a sprite is empty,
+        // so the cycle sat on blank frames and the owner saw a puff that "does not move"
+        // (live, 2026-10-22). `sprDust` also exists - it was checked in the asset table
+        // alongside `objDust`, `DustSpawn` and `DustEntityStep`.
+        global.coopDustFrames = 0;
+        if (global.coopDustSprite > 0) {
+            global.coopDustFrames = sprite_get_number(global.coopDustSprite);
+            if (global.coopDustFrames < 1) global.coopDustFrames = 1;
+        }
     }
     if (global.coopDustSprite > 0 && global.coopDustFrames > 0) {
         // **The puff runs on its own clock, not the walk cycle.** Tying it to the walk was the

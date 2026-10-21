@@ -200,7 +200,7 @@ def pong(nonce: int) -> bytes:
 
 
 def pos(x: int, y: int, angle: int = 0, facing: int = 1,
-        sprite: str = "", image: int = 0, room: int = 0, hold: int = 65535) -> bytes:
+        sprite: str = "", index: float = 0.0, room: int = 0, hold: int = 65535) -> bytes:
     """The peer's position (packet 6).
 
     The sprite travels **by name** ("idle" / "walk") since protocol 7: only a real game can
@@ -213,12 +213,17 @@ def pos(x: int, y: int, angle: int = 0, facing: int = 1,
     while `PLAYER_WALK_SPEED 90 / SPAWN_ANIM_SPEED 4 = 22.5` - the frame and the walk are
     driven by the same speed constant, so **step 2k of the walk is frame k of the sprite**
     and the cycle is **six** frames. A byte threw the timer away and quantised the walk into
-    a six-step stutter. `image` is given here as a step number and multiplied by 2 then by
-    100, so the tests read the way the game does.
+    a six-step stutter.
+
+    `index` is therefore the **raw `image_index`**, exactly as the game would report it, and it
+    goes on the wire in hundredths. It is **not** multiplied again: the mock advances its index
+    at the game's own rate (`+0.15` a tick), so sending a raw index is what makes the mock's
+    packets indistinguishable from the game's - and a mock that reports a different rate tells
+    the puppet the wrong thing while every test still passes.
     """
     return (bytes([POS]) + struct.pack("<iih", x, y, angle)
             + struct.pack("<b", facing) + p_str(sprite)
-            + struct.pack("<HBH", int(round(image * 2 * 100)) & 0xFFFF, room, hold))
+            + struct.pack("<HBH", int(round(index * 100)) & 0xFFFF, room, hold))
 
 
 def intent_place(intent_id: int, room: int, x: int, y: int, name: str) -> bytes:
@@ -1063,7 +1068,7 @@ class Peer:
         if self.spin:
             self.angle = (self.angle + 15) % 360
         self.send(pos(hx, hy, angle=self.angle, facing=self.facing,
-                      sprite="walk" if self.moving else "idle", image=self.frame,
+                      sprite="walk" if self.moving else "idle", index=self.frame,
                       room=self.room, hold=self.hold_item))
         # M3.1: the world snapshot. The mock has no world, so it sends the one cell it
         # knows is land - the cell under the player - with the "remove what the host
@@ -1188,7 +1193,7 @@ class Peer:
             else:
                 ax = ay = None
             if ax is not None:
-                self.send(pos(ax, ay, angle=0, facing=1, sprite="walk", image=self.frame,
+                self.send(pos(ax, ay, angle=0, facing=1, sprite="walk", index=self.frame,
                               room=self.room, hold=self.hold_item))
         # ask the host to build something; retry other spots on a spot refusal
         # (water or occupancy), and after a success start the next round, so a run

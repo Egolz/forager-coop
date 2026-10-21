@@ -1767,24 +1767,27 @@ switch (_cmd) {
         }
         Trace("Co-op: <- mutation seq " + string(_seq) + " '" + _mname + "' at "
               + string(_mpx) + "," + string(_mpy) + ".");
-        // **The self-test.** The host said a structure now exists at (x,y); this side has to
-        // have it. Checking the **world**, not the packet, is what makes the client's apply
-        // path testable at all: the mock peer can assert the bytes that arrived, but only
-        // the game can assert that the structure is really there afterwards - and the
-        // client's apply path is the half that used to have no test at all.
+        // **The self-test checks where the structure ended up, not where it was asked for.**
+        // Moving it is part of applying the mutation - the host validated the spot against
+        // its own world, and the client's world is not that world yet - so asserting the
+        // requested position reported a failure for a mutation that had been applied
+        // correctly. Both positions are in the line, so the log says which was which.
         var _mobj = CoopStructObject(_msid);
         var _mhit = -1;
-        if (_mobj >= 0) _mhit = CoopStructureAt(_mobj, _mx, _my);
+        if (_mobj >= 0) _mhit = CoopStructureAt(_mobj, _mpx, _mpy);
         if (_mhit >= 0) {
             Trace("Co-op: SELF-TEST PASS - seq " + string(_seq) + " applied: '"
-                  + _mname + "' is at " + string(_mx) + "," + string(_my) + ".");
+                  + _mname + "' is at " + string(_mpx) + "," + string(_mpy) + ".");
             CoopSendDebugLine("selftest PASS: mutation seq " + string(_seq) + " applied, '"
-                              + _mname + "' is at " + string(_mx) + "," + string(_my) + ".");
+                              + _mname + "' at " + string(_mpx) + "," + string(_mpy)
+                              + (_mpx != _mx || _mpy != _my
+                                 ? " (asked for " + string(_mx) + "," + string(_my) + ")"
+                                 : ""));
         } else {
             Trace("Co-op: SELF-TEST FAIL - seq " + string(_seq) + " did not put '"
-                  + _mname + "' at " + string(_mx) + "," + string(_my) + ".");
+                  + _mname + "' at " + string(_mpx) + "," + string(_mpy) + ".");
             CoopSendDebugLine("selftest FAIL: mutation seq " + string(_seq) + " did not put '"
-                              + _mname + "' at " + string(_mx) + "," + string(_my) + ".");
+                              + _mname + "' at " + string(_mpx) + "," + string(_mpy) + ".");
         }
         break;
 

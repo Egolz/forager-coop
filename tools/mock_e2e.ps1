@@ -24,7 +24,7 @@ python -u tools/coop_mockpeer.py selftest
 if ($LASTEXITCODE -ne 0) { Write-Host "selftest FAILED"; exit 1 }
 
 $srv = Start-Process -FilePath "python" `
-    -ArgumentList "-u", "tools/coop_mockpeer.py", "server", "--port", "$port", "--loot" `
+    -ArgumentList "-u", "tools/coop_mockpeer.py", "server", "--port", "$port", "--loot", "--echo" `
     -RedirectStandardOutput $srvLog -RedirectStandardError "$log/server.err" `
     -PassThru -NoNewWindow
 Start-Sleep -Seconds 2

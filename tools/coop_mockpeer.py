@@ -434,6 +434,11 @@ class Peer:
         # It is off by default, so the harness does not quietly wreck the owner's island;
         # the offline end-to-end test turns it on, where there is no world to damage.
         self.loot_on_hello = False
+        # Whether to answer a placement with a **second** structure the client did not ask
+        # for - the visible proof that the host drives the client's world. Off by default: it
+        # is a demonstration, not a test, and the owner did not want a furnace appearing next
+        # to the one they were building.
+        self.echo_structure = False
         # Where the puppet **stands**. Picked once, when the mock first learns where the host
         # is, and then left alone - see tick().
         self.anchor: tuple[int, int] | None = None
@@ -718,15 +723,20 @@ class Peer:
             # the host drives the client's world: the player sees a structure appear that
             # they did not build.
             #
-            # It goes **four cells** away, not one: a structure's sprite is wider than the
-            # 16 px cell, so one cell over would put the two on top of each other and the
-            # owner would read it as a placement bug.
-            self.seq += 1
-            self.send(mutation_place(self.seq, 0, pkt["room"],
-                                     pkt["x"] + 64, pkt["y"], -(pkt["y"]),
-                                     pkt["structure"]))
-            log(f"-> MUTATION_PLACE seq={self.seq} '{pkt['structure']}' at "
-                f"{pkt['x'] + 64},{pkt['y']} (one the client did not ask for)")
+            # It is **off by default**. It is a demonstration rather than a test, and the
+            # owner did not want a furnace appearing next to the one they were building -
+            # which is the right thing to want from a test tool. The offline end-to-end test
+            # turns it on.
+            #
+            # It goes four cells over, not one: a structure's sprite is wider than the
+            # 16 px cell, so one cell over would put the two on top of each other.
+            if self.echo_structure:
+                self.seq += 1
+                self.send(mutation_place(self.seq, 0, pkt["room"],
+                                         pkt["x"] + 64, pkt["y"], -(pkt["y"]),
+                                         pkt["structure"]))
+                log(f"-> MUTATION_PLACE seq={self.seq} '{pkt['structure']}' at "
+                    f"{pkt['x'] + 64},{pkt['y']} (one the client did not ask for)")
         elif name == "INTENT_PLACE":
             log(f"   (the client asked to build '{pkt['structure']}' at {pkt['x']},{pkt['y']})")
         elif name == "MUTATION_PLACE":
@@ -1187,7 +1197,7 @@ def _drain(s: socket.socket, seconds: float) -> bytes:
     return data
 
 
-def run_server(port: int, loot: bool = False) -> None:
+def run_server(port: int, loot: bool = False, echo: bool = False) -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # The port may still be held by a game that is hosting and has not let go of it yet, so
@@ -1213,6 +1223,7 @@ def run_server(port: int, loot: bool = False) -> None:
         reset_debug_file()
         peer = Peer(conn, is_host=True)
         peer.loot_on_hello = loot
+        peer.echo_structure = echo
         try:
             while True:
                 peer.pump()
@@ -1250,6 +1261,10 @@ def main() -> int:
                          "game spawn a pickup inside whatever stands there - a tree goes - "
                          "so it is off by default; the offline end-to-end test turns it on, "
                          "where there is no world to damage")
+    ap.add_argument("--echo", action="store_true",
+                    help="server mode: answer a placement with a second structure the client "
+                         "did not ask for - the visible proof that the host drives the "
+                         "client's world. Off by default: it is a demonstration, not a test")
     args = ap.parse_args()
     place = "" if args.no_place else args.place
     try:
@@ -1261,7 +1276,7 @@ def main() -> int:
         elif args.mode == "probe":
             run_probe(args.host, args.port, settle=4.0)
         else:
-            run_server(args.port, loot=args.loot)
+            run_server(args.port, loot=args.loot, echo=args.echo)
     except KeyboardInterrupt:
         log("bye")
     return 0

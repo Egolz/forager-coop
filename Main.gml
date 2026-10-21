@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.65-m5a";
+global.coopVersion  = "0.0.66-m5b";
 global.coopProtocol = 8;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -165,6 +165,12 @@ global.coopPeerWalking = false;
 global.coopAnimFrame = 0;
 global.coopAnimTick = 0;
 global.coopAnimStep = 6;      // the game advances a walk frame about every 6th frame
+                              // **measured from the wire, 2026-10-22**: the peer's own
+                              // POS showed `frame 2` twice 7 px apart at 20 packets/s, so
+                              // the game holds a walk frame ~6 game-frames, which is what
+                              // the puppet's own cycle now runs at. It was 4, which ran the
+                              // puppet ~1.5x too fast and is what the owner saw as the
+                              // puppet "not agreeing" with the player beside it.
 global.coopAnimWalking = false;
 global.coopDustSprite = -1;
 global.coopDustLastFrame = -1;
@@ -238,6 +244,21 @@ global.coopBushIds    = [];     // its instance id
 global.coopBushXs     = [];     // its x
 global.coopBushYs     = [];     // its y
 global.coopBushObj    = -2;     // -2 = unresolved, -1 = no such object in this build
+
+// --- M3.5: the enemies ------------------------------------------------------------------
+// The census: which enemy objects exist here (resolved once), and the throttles that keep
+// the diagnostic from becoming a wall of text.
+global.coopMobObj   = -2;   // -2 = unresolved; else the list of enemy object indices
+global.coopMobTick  = 0;    // steps since the census started
+global.coopMobSeen  = -1;   // how many enemies the census saw when it last reported
+
+// --- The roll / player-HP probe (2026-10-22) -------------------------------------------
+// Prints the player's own `angle` and `image_index` when either is worth looking at, so a
+// live roll says once and for all whether the game's roll is the angle (a spin) or the
+// frame counter.
+global.coopProbeAngle = 0;
+global.coopProbeImage = 0;
+global.coopProbeTick  = 0;
 
 global.coopPingNonce   = 0;
 global.coopPingSentAt  = -1;

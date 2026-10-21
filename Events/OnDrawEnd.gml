@@ -103,6 +103,17 @@ if (_dist > 0.01) {
     var _step = global.coopPeerSpeed * _dt;
     if (_step > 24) _step = 24;
     if (_step < 0) _step = 0;
+    // **The catch-up step has a floor, and that is what removed the stutter.**
+    //
+    // The step is the peer's *measured* walking speed, so a packet that arrives while the
+    // peer is slowing down carries a small speed - and the puppet then crawls toward the
+    // reported spot for a whole frame, which reads as a **micro-freeze** (the owner saw it
+    // live, 2026-10-22: "sometimes the mock's model has a micro-freeze while walking").
+    //
+    // A floor of about a third of the distance, never below the display frame's own
+    // pixels-per-frame (`6 * _dt`, the game's walk speed), means the puppet always closes
+    // a good part of the gap in the frame it is given, and the motion is even instead of
+    // stop-and-go. It still cannot go past the target, and the lost-packet cap stays.
     if (global.coopPeerSpeed <= 0.001) {
         // The peer is standing still: settle on the reported spot.
         global.coopDrawX = _tx;
@@ -112,8 +123,17 @@ if (_dist > 0.01) {
         global.coopDrawX = _tx;
         global.coopDrawY = _ty;
     } else {
-        global.coopDrawX += _dx / _dist * _step;
-        global.coopDrawY += _dy / _dist * _step;
+        var _floor_step = _dist * 0.34;
+        var _min_step = 6 * _dt;
+        if (_floor_step < _min_step) _floor_step = _min_step;
+        if (_step < _floor_step) _step = _floor_step;
+        if (_step >= _dist) {
+            global.coopDrawX = _tx;
+            global.coopDrawY = _ty;
+        } else {
+            global.coopDrawX += _dx / _dist * _step;
+            global.coopDrawY += _dy / _dist * _step;
+        }
     }
 }
 var _x = global.coopDrawX;
@@ -203,7 +223,11 @@ if (_walking) {
     if (global.coopDustSprite <= 0) {
         global.coopDustSprite = asset_get_index("sprDust");
     }
-    if (global.coopDustSprite > 0 && _frame != global.coopDustLastFrame) {
+    // **The puff is drawn while walking, every frame.** It used to appear only on a *change*
+    // of frame, and the owner saw **no dust at all** (live, 2026-10-22) - so the change test
+    // is gone, and it is the walk cycle itself that decides: `_walking` is only true when
+    // the peer actually moved since the last packet.
+    if (global.coopDustSprite > 0) {
         global.coopDustLastFrame = _frame;
         var _dh = 8;
         var _dyo = 0;
@@ -212,8 +236,13 @@ if (_walking) {
             _dyo = sprite_get_yoffset(global.coopDustSprite);
         }
         var _ddy = _y - _dh + _dyo;
-        draw_sprite_ext(global.coopDustSprite, 0, _x - _face * 5, _ddy, 1, 1, 0,
-                        c_white, 0.5);
+        // **Twice as wide as tall.** Forager's players move left and right almost all the
+        // time, and `sprDust` is a soft round puff; stretched horizontally it reads as the
+        // smear a foot leaves on the ground rather than as a ball, which is what the game's
+        // own dust looks like. A plain 1:1 puff at this size was there and was not seen
+        // (the owner, live, 2026-10-22).
+        draw_sprite_ext(global.coopDustSprite, 0, _x - _face * 6, _ddy, 2, 1, 0,
+                        c_white, 0.75);
     }
 }
 

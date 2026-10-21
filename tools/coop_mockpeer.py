@@ -65,8 +65,8 @@ import sys
 import tempfile
 import time
 
-PROTOCOL = 6
-VERSION = "mockpeer-6"
+PROTOCOL = 8
+VERSION = "mockpeer-8"
 
 
 def _protocol_from_source() -> int | None:
@@ -617,6 +617,14 @@ class Peer:
         self.mob_sent = False
         self.mob_on_hello = False
         self.mob_object = 0
+        # **The mob walk is found by name on the host's own island.** There is no fixed
+        # object index to hard-code: the island is a save-specific thing, and `objSlime`
+        # only exists where the game put one. So the mock asks the host's own `parEnemy`
+        # family census, picks the first member, and announces *that object* appearing -
+        # which lands exactly on a mob the host already has, so the host exercises its
+        # **adopt** path (the one that must not duplicate the island's slimes) without a
+        # live enemy being created anywhere.
+        self.mob_stand = None
         self.host_spot: tuple[int, int] | None = None   # where the host stands
         # The scripted loot is **destructive in a live world** - a drop at a fixed tile makes
         # the game spawn a pickup inside whatever stands there, and the tree it was in goes.
@@ -891,7 +899,17 @@ class Peer:
         elif name == "DEBUG_LINE":
             # The mod's own console, forwarded: this game's mods cannot write
             # files, so a long dump arrives here and we write it down.
-            debug_note(pkt["text"])
+            _dl = pkt["text"]
+            debug_note(_dl)
+            # **The enemy census.** The mod forwards what its `parEnemy` walk found, and
+            # this is the only honest way to learn which object is a slime on *this*
+            # island - so the mock keeps the first member and can announce a mob appearing
+            # that the host already has (the host then adopts instead of duplicating).
+            m = re.search(r"enemies: (\d+) in the walk", _dl)
+            if m and int(m.group(1)) > 0:
+                m2 = re.search(r"obj#(\d+) '([^']*)' id (\d+) at (-?\d+),(-?\d+)", _dl)
+                if m2 and self.mob_stand is None:
+                    self.mob_stand = (int(m2.group(4)), int(m2.group(5)), int(m2.group(1)))
         elif name == "INTENT_REJECTED":
             # The host refused our build request. If the reason is that the spot is
             # water, try the next candidate offset - this is also the positive
@@ -1065,13 +1083,19 @@ class Peer:
             log(f"-> SNAP_STRUCT 1 structure (id 1) at {_sx},{_sy} (the player's own cell)")
             self.send(snap_struct(self.room, 1, 0, []))
             log("-> SNAP_STRUCT end of snapshot")
-        # M3.5: a mob appearing. The far end creates it - a slime on the owner's island.
+        # M3.5: a mob appearing. **Announced as a mob the host already has**, found by the
+        # host's own enemy census - so the host runs its *adopt* path (the one that must not
+        # duplicate the island's slimes) and no new enemy is created anywhere. A hard-coded
+        # object index would be wrong: the object that is a slime depends on the island.
         if self.mob_on_hello and not self.mob_sent and self.player is not None:
             self.mob_sent = True
-            _mx = int(px // 16) * 16 + 8
-            _my = int(py // 16) * 16 + 8
-            self.send(mob(0, _mx, _my, 101234, self.mob_object))
-            log(f"-> MOB appeared obj#{self.mob_object} at {_mx},{_my}")
+            if self.mob_stand is None:
+                log("-> MOB: no enemy census from the host, so nothing to announce")
+            else:
+                _mx, _my, _mobj = self.mob_stand
+                self.send(mob(0, int(_mx), int(_my), 101234, int(_mobj)))
+                log(f"-> MOB appeared obj#{int(_mobj)} at {int(_mx)},{int(_my)} "
+                    f"(a mob the host already has - the host should adopt it, not add one)")
 
     def choose_structure(self) -> str | None:
         if self.place_wanted:

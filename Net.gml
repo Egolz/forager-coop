@@ -397,7 +397,7 @@ var _b = buffer_create(32, buffer_grow, 1);
 buffer_write(_b, buffer_u8, CoopCmd.POS);
 buffer_write(_b, buffer_s32, floor(objPlayer.x));
 buffer_write(_b, buffer_s32, floor(objPlayer.y));
-buffer_write(_b, buffer_u16, floor(objPlayer.angle));
+buffer_write(_b, buffer_u16, floor(abs(objPlayer.angle)) mod 360);
 buffer_write(_b, buffer_s8, floor(objPlayer.facing));
 // The sprite the peer should draw, **by name** (M3.4).
 //

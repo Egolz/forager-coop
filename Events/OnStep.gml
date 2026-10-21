@@ -11,6 +11,7 @@ if (keyboard_check_pressed(vk_f9)) CoopDumpStructures();
 if (keyboard_check_pressed(vk_f10)) CoopProbeWorld();
 if (keyboard_check_pressed(vk_f11)) CoopProbeApi();
 if (keyboard_check_pressed(vk_f12)) CoopProbeSpot();
+if (keyboard_check_pressed(vk_f13)) CoopProbeLand();
 if (keyboard_check_pressed(vk_f3)) CoopProbeItems();
 
 // ---------------------------------------------------------------------------

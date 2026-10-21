@@ -1349,6 +1349,94 @@ Trace("Co-op: structure snapshot applied - " + string(global.coopStructAdded)
 CoopSendDebugLine("Co-op: structure snapshot applied - " + string(global.coopStructAdded)
                   + " structures placed, " + string(_sr_removed) + " removed.");
 
+#define CoopProbeLand()
+// F13. **Does the game's own land function take absolute coordinates?**
+//
+// The land sync calls `PlaceLandfill(x, y)` with the host's cell - the same call and the
+// same arguments the reference mod makes. That is the best evidence available short of
+// the game itself, and it is not proof: if the arguments are **offsets from the player**,
+// the land would appear hundreds of pixels away, the client's world would never match the
+// host's, and nothing anywhere would say so.
+//
+// So this is a **probe with an undo**. It finds a cell that is water, makes it land,
+// asks the **whole grid** what changed, and then puts the water back.
+//
+// What it reports:
+//   * the cell it tried and whether that cell is land afterwards (absolute);
+//   * every cell that became land anywhere on the grid - the other hypothesis, and the
+//     grid scan is what finds it wherever it landed;
+//   * whether the undo worked.
+//
+// The undo is the last step for a reason: a probe that leaves a 16x16 tile of land in the
+// owner's world is a probe that costs something.
+if (instance_exists(objPlayer)) {
+    // The grid before. 84 x 84 cells, sampled at the centres.
+    var _pl_before = array_create(7056, 0);
+    for (var _pl_y = 8; _pl_y < 1344; _pl_y += 16) {
+        for (var _pl_x = 8; _pl_x < 1344; _pl_x += 16) {
+            if (WaterCollision(_pl_x, _pl_y) == 0) {
+                _pl_before[floor(_pl_x / 16) + floor(_pl_y / 16) * 84] = 1;
+            }
+        }
+    }
+    // A water cell near the player, and not under anything.
+    var _pl_tx = -1;
+    var _pl_ty = -1;
+    for (var _pl_r = 1; _pl_r <= 40 && _pl_tx < 0; _pl_r += 1) {
+        for (var _pl_dy = -_pl_r; _pl_dy <= _pl_r && _pl_tx < 0; _pl_dy += 1) {
+            for (var _pl_dx = -_pl_r; _pl_dx <= _pl_r && _pl_tx < 0; _pl_dx += 1) {
+                if (abs(_pl_dx) != _pl_r && abs(_pl_dy) != _pl_r) continue;
+                var _pl_cx = floor(objPlayer.x / 16) * 16 + _pl_dx * 16 + 8;
+                var _pl_cy = floor(objPlayer.y / 16) * 16 + _pl_dy * 16 + 8;
+                if (_pl_cx < 8 || _pl_cx > 1336) continue;
+                if (_pl_cy < 8 || _pl_cy > 1336) continue;
+                if (WaterCollision(_pl_cx, _pl_cy) == 0) continue;
+                if (CoopSolidInCell(_pl_cx, _pl_cy, 0) != 0) continue;
+                _pl_tx = _pl_cx;
+                _pl_ty = _pl_cy;
+            }
+        }
+    }
+    if (_pl_tx < 0) {
+        Trace("Co-op: F13 land probe - no water cell within 640 px of the player.");
+        CoopSendDebugLine("Co-op: F13 land probe - no water cell within 640 px of the player.");
+    } else {
+        var _pl_px = objPlayer.x;
+        var _pl_py = objPlayer.y;
+        with (objPlayer) { PlaceLandfill(_pl_tx, _pl_ty); }
+        // What changed on the whole grid?
+        var _pl_new = "";
+        var _pl_count = 0;
+        for (var _pl_y2 = 8; _pl_y2 < 1344; _pl_y2 += 16) {
+            for (var _pl_x2 = 8; _pl_x2 < 1344; _pl_x2 += 16) {
+                var _pl_c2 = floor(_pl_x2 / 16) + floor(_pl_y2 / 16) * 84;
+                if (WaterCollision(_pl_x2, _pl_y2) == 0 && _pl_before[_pl_c2] == 0) {
+                    _pl_count += 1;
+                    if (_pl_count <= 5) _pl_new += string(_pl_x2) + "," + string(_pl_y2) + " ";
+                }
+            }
+        }
+        var _pl_here = (WaterCollision(_pl_tx, _pl_ty) == 0) ? "yes" : "NO";
+        // The undo.
+        with (objPlayer) { RemoveLandfill(_pl_tx, _pl_ty); }
+        var _pl_gone = 0;
+        for (var _pl_y3 = 8; _pl_y3 < 1344; _pl_y3 += 16) {
+            for (var _pl_x3 = 8; _pl_x3 < 1344; _pl_x3 += 16) {
+                var _pl_c3 = floor(_pl_x3 / 16) + floor(_pl_y3 / 16) * 84;
+                if (WaterCollision(_pl_x3, _pl_y3) == 0 && _pl_before[_pl_c3] == 0) _pl_gone += 1;
+            }
+        }
+        var _pl_text = "Co-op: F13 land probe - tried " + string(_pl_tx) + "," + string(_pl_ty)
+                     + " (player at " + string(floor(_pl_px)) + "," + string(floor(_pl_py))
+                     + "); that cell is land now: " + _pl_here
+                     + "; cells that became land: " + string(_pl_count)
+                     + (string(_pl_count) > 0 ? " at " + _pl_new : "")
+                     + "; after the undo, cells that are still new: " + string(_pl_gone) + ".";
+        Trace(_pl_text);
+        CoopSendDebugLine(_pl_text);
+    }
+}
+
 #define CoopDumpStructures()
 // F9. Is the object our table calls a structure really one? `isStruct` asks the
 // game itself (object_is_ancestor against its own parStructure), which is the

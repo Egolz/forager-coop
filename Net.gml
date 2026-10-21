@@ -419,15 +419,19 @@ if (floor(objPlayer.x) != global.coopLastX || floor(objPlayer.y) != global.coopL
 global.coopLastX = floor(objPlayer.x);
 global.coopLastY = floor(objPlayer.y);
 buffer_write(_b, buffer_string, global.coopLastMoved ? "walk" : "idle");
-// The animation frame. `objPlayer.image_index` is the frame the game itself draws the
-// player with, so it is the right number to send - and it is an integer in this build,
-// not a timer.
+// The animation frame, **as a fraction** (M3.4 fix, 2026-10-22).
 //
-// `mod` in GML keeps the sign of the dividend, so a negative image_index would write a
-// negative value into a **u8** field - a byte write outside the field's range, in a
-// buffer that is then handed to the network layer. Normalising to 0..255 first is one
-// `abs` and removes the whole class of risk.
-buffer_write(_b, buffer_u8, abs(floor(objPlayer.image_index)) mod 256);
+// The frame used to be sent as `floor(image_index)` in a byte, and a live probe showed what
+// that costs: in this build `image_index` is a **timer**, not an integer - it climbs
+// `0.00 0.15 0.30 … 5.85 0.00`, so it is a cycle of about six frames advancing about 0.15
+// per game frame. Flattening it to an integer quantised the walk into a six-step stutter
+// and threw away nine tenths of the information.
+//
+// So the fraction is sent in **hundredths**, and the far end interpolates between packets
+// with the rate the packets themselves measure (`global.coopPeerFrameRate`). `abs` and
+// `mod` normalise first: `mod` keeps the sign of the dividend in GML, and a negative value
+// written into a `u16` is a byte write outside the field's range.
+buffer_write(_b, buffer_u16, floor(abs(objPlayer.image_index) * 100) mod 65535);
 buffer_write(_b, buffer_u8, objPlayer.room);
 // The item in the peer's hand, as an item id (-1 = none). The far end turns it into a
 // sprite with the game's own `ItemGet(id, ItemData.Sprite)`.
@@ -2075,7 +2079,9 @@ switch (_cmd) {
         // The sprite **by name** (M3.4), the animation frame and the held item.
         var _ps_name = buffer_read(_buf, buffer_string);
         global.coopPeer.sprite = CoopResolvePeerSprite(_ps_name);
-        global.coopPeerFrame   = buffer_read(_buf, buffer_u8);
+        // The frame arrives in **hundredths** (M3.4 fix, 2026-10-22): `image_index` is a
+        // timer in this build, and flattening it to an integer is what made the walk stutter.
+        var _ps_frame = buffer_read(_buf, buffer_u16) / 100;
         global.coopPeer.room   = buffer_read(_buf, buffer_u8);
         global.coopPeerHold    = buffer_read(_buf, buffer_u16);
         global.coopPeer.seen   = true;
@@ -2102,17 +2108,42 @@ switch (_cmd) {
         global.coopPeerPrevX = global.coopPeer.x;
         global.coopPeerPrevY = global.coopPeer.y;
         global.coopPeerPrevAt = _ps_now;
-        // **Learn how many frames the cycle has.** The peer sends the frame the game drew
-        // it with, and the biggest frame it has ever sent is the last frame of the cycle.
-        // That is what lets the local animation cycle without ever drawing a frame that
-        // does not exist - a frame past the end of the sprite is drawn as nothing, and a
-        // puppet that flickers is worse than a puppet that does not move.
-        global.coopPeerWalking = (_ps_name == "walk");
-        if (global.coopPeerWalking) {
-            if (global.coopPeerFrame > global.coopWalkMax) global.coopWalkMax = global.coopPeerFrame;
-        } else {
-            if (global.coopPeerFrame > global.coopIdleMax) global.coopIdleMax = global.coopPeerFrame;
+        // **Learn how many frames the cycle has.** The biggest frame the peer has ever sent
+        // is its last frame, so the puppet never draws a frame the sprite does not have - a
+        // frame past the end is drawn as **nothing**, and a puppet that flickers is worse
+        // than a puppet that does not move.
+        //
+        // **And learn how fast the cycle runs**, measured from the packets themselves: the
+        // frame's own rate, in frames per millisecond, as the difference between this packet
+        // and the last. The far end needs it because it carries the frame between packets -
+        // `_ps_frame` is a *fraction* in this build, the game's own timer into the cycle.
+        var _ps_frame_new = _ps_frame;
+        if (_ps_frame < global.coopPeerFrame) {
+            // The cycle wrapped (the frame went backwards). Count what is left of it and
+            // write the "length" down: it is the frame the peer reached before wrapping.
+            global.coopLoopLen = max(global.coopLoopLen, floor(global.coopPeerFrame) + 1);
+            global.coopFrameWraps += 1;
         }
+        if (global.coopPeerFrameAt > 0
+            && _ps_now - global.coopPeerFrameAt > 0
+            && _ps_frame_new >= global.coopPeerFrame
+            && global.coopFrameWraps > 0) {
+            var _pf_d = _ps_frame_new - global.coopPeerFrame;
+            var _pf_t = _ps_now - global.coopPeerFrameAt;
+            if (_pf_d > 0 && _pf_t > 0) {
+                // A frame's worth of movement (0..1) over the time it took: frames per ms.
+                global.coopPeerFrameRate = _pf_d / _pf_t;
+            }
+        }
+        global.coopPeerFrame   = _ps_frame_new;
+        global.coopPeerFrameF  = _ps_frame_new;
+        global.coopPeerFrameAt = _ps_now;
+        global.coopFrameSnap   = false;
+        if (global.coopPeerFrameRate <= 0) {
+            // Nothing measured yet: snap, so the first frame after joining is right.
+            global.coopFrameSnap = true;
+        }
+        global.coopPeerWalking = (_ps_name == "walk");
         break;
 
     case CoopCmd.BYE:

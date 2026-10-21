@@ -22,7 +22,8 @@ Mod packets (little-endian; GameMaker buffer_string = UTF-8 + NUL):
     3  REJECT           string reason
     4  PING             u32 nonce
     5  PONG             u32 nonce
-    6  POS              s32 x, s32 y, u16 angle, s8 facing, s32 sprite, u8 image, u8 room
+    6  POS              s32 x, s32 y, u16 angle, s8 facing, string sprite, u16 frame,
+                       u8 room, u16 hold          (frame is in hundredths, protocol 9)
     7  BYE              string reason
     8  INTENT_PLACE     u32 intentId, u8 room, s32 x, s32 y, string structureName
     9  MUTATION_PLACE   u32 seq, u32 intentId, u8 room, s32 x, s32 y, s32 depth, string name
@@ -65,8 +66,8 @@ import sys
 import tempfile
 import time
 
-PROTOCOL = 8
-VERSION = "mockpeer-8"
+PROTOCOL = 9
+VERSION = "mockpeer-9"
 
 
 def _protocol_from_source() -> int | None:
@@ -205,10 +206,15 @@ def pos(x: int, y: int, angle: int = 0, facing: int = 1,
     The sprite travels **by name** ("idle" / "walk") since protocol 7: only a real game can
     produce an asset index, and a peer that is not the game has to be able to say "I am
     walking" too. The frame and the item in the hand ride along with it.
+
+    The frame is in **hundredths** since protocol 9, because a live probe showed the game's
+    `image_index` is a *timer* (`0.00 0.15 0.30 … 5.85 0.00`), not an integer - a byte
+    quantised the walk into a six-step stutter. `image` is still given here as a frame
+    number and multiplied, so the tests read the way the game does.
     """
     return (bytes([POS]) + struct.pack("<iih", x, y, angle)
             + struct.pack("<b", facing) + p_str(sprite)
-            + struct.pack("<BBH", image, room, hold))
+            + struct.pack("<HBH", int(round(image * 100)) & 0xFFFF, room, hold))
 
 
 def intent_place(intent_id: int, room: int, x: int, y: int, name: str) -> bytes:
@@ -350,8 +356,9 @@ def parse_one(buf: bytes):
         (nonce,) = struct.unpack("<I", buf[1:5])
         return {"cmd": cmd, "name": NAMES[cmd], "nonce": nonce}, 5
     if cmd == POS:
-        # cmd | s32 x | s32 y | u16 angle | s8 facing | string sprite | u8 frame | u8 room | u16 hold
-        if len(buf) < 17:
+        # cmd | s32 x | s32 y | u16 angle | s8 facing | string sprite | u16 frame | u8 room | u16 hold
+        #                                  (frame in HUNDREDTHS since protocol 9)
+        if len(buf) < 18:
             return None, 0
         x, y, angle = struct.unpack("<iih", buf[1:11])
         (facing,) = struct.unpack("<b", buf[11:12])
@@ -361,10 +368,11 @@ def parse_one(buf: bytes):
         sprite, i = s
         if i + 4 > len(buf):
             return None, 0
-        image, room, hold = struct.unpack("<BBH", buf[i:i + 4])
-        i += 4
+        image, room, hold = struct.unpack("<HBH", buf[i:i + 5])
+        i += 5
         return {"cmd": cmd, "name": NAMES[cmd], "x": x, "y": y, "angle": angle,
-                "facing": facing, "sprite": sprite, "image": image, "room": room,
+                "facing": facing, "sprite": sprite, "image": image / 100,
+                "image_raw": image, "room": room,
                 "hold": hold}, i
     if cmd in (REJECT, BYE):
         s = _read_str(buf, 1)
@@ -895,7 +903,7 @@ class Peer:
                 # which frame of the walk cycle the player is on - and the log is the only
                 # place that can answer it from the outside.
                 log(f"   pos {pkt['x']},{pkt['y']} room {pkt['room']}"
-                    f" facing {pkt['facing']} angle {pkt['angle']} frame {pkt['image']}")
+                    f" facing {pkt['facing']} angle {pkt['angle']} frame {pkt['image']:.2f}")
         elif name == "DEBUG_LINE":
             # The mod's own console, forwarded: this game's mods cannot write
             # files, so a long dump arrives here and we write it down.
@@ -1036,11 +1044,18 @@ class Peer:
             self.moving = True
         else:
             self.moving = False
-        self.frame = (self.frame + 1) % 4 if self.moving else 0
-        # **The angle.** Forager's roll has no sprite of its own - the player's assets are
-        # only idle and walk plus the costume variants - so a roll is the player spinning,
-        # and the spin is the angle. `--spin` turns the puppet round, which is how that
-        # path can be seen without a second human.
+        # **The mock's own frame is a timer, like the game's.** A live probe showed the
+        # real `objPlayer.image_index` climbs `0.00 0.15 0.30 … 5.85 0.00`, so the mock
+        # sends the same shape: a fractional frame in a cycle of six, advancing 0.15 per
+        # game frame - which is what lets the client's interpolation be tested honestly.
+        if self.moving:
+            self.frame = (self.frame + 0.15) % 6.0
+        else:
+            self.frame = (self.frame + 0.15) % 6.0     # the game's cycle runs even standing
+        # **The angle.** Forager's roll turned out **not** to be a spin: a live measurement
+        # showed `objPlayer.angle` never leaves zero while rolling - the roll is the body's
+        # frame counter being driven round. `--spin` still turns the puppet, because that is
+        # the one thing the client cannot otherwise be shown.
         if self.spin:
             self.angle = (self.angle + 15) % 360
         self.send(pos(hx, hy, angle=self.angle, facing=self.facing,

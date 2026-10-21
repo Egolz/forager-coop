@@ -181,7 +181,10 @@ if (global.coopBushObj == -2) {
     var _bush_names = ["objBush", "objCotton", "objFlower"];
     for (var _bn = 0; _bn < array_length(_bush_names); _bn += 1) {
         var _bidx = asset_get_index(_bush_names[_bn]);
-        if (_bidx >= 0) array_push(global.coopBushObj, _bidx);
+        Trace("Co-op asset probe (bush): '" + _bush_names[_bn] + "' -> " + string(_bidx));
+        // **`> 0`** for the same reason as the enemy census: this build answers a name it
+        // does not know with 0, and object 0 is a real object, so `>= 0` accepts the miss.
+        if (_bidx > 0) array_push(global.coopBushObj, _bidx);
     }
     Trace("Co-op: bush sync watching " + string(array_length(global.coopBushObj))
           + " of 3 plant objects: " + string(global.coopBushObj));
@@ -269,34 +272,54 @@ if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
 // ============================================================================
 // The enemies (M3.5).
 //
-// **Two things are asked here, and only one of them is about the enemies.**
+// **The census is the sync, and it no longer depends on knowing what a slime is called.**
+// The first version watched `parEnemy` and `objSlime` by name and reported **nothing at
+// all** while the owner stood next to a slime (live, 2026-10-22). Two causes, both now
+// handled:
 //
-// 1. *Do the mob events fire?* The mod now defines `OnMobSpawn`/`OnMobDeath` (the names the
-//    reference mod proves the loader knows, though its own handlers are marked `return;
-//    // WIP`). A walking census is the control for that: if a slime is standing in view and
-//    the census sees it while no spawn event arrived, then the event does not fire in this
-//    build, and the census - not the event - is the sync.
+//  * `asset_get_index` in this build answers a name it does not know with **0**, not -1.
+//    A guard of `>= 0` therefore *accepts the miss* and puts object 0 in the walk list -
+//    a census that walks the wrong object and reports nothing while looking healthy.
+//    The guard is `> 0` now, and the answers are printed once so the next session knows
+//    which names resolve.
+//  * More importantly, the sync must not depend on names at all. What makes a watched
+//    object an **enemy** is decided by what it carries: a creature has `hp` and `hpMax`,
+//    and a bush, a rock or a building does not. So the watch list is built from the live
+//    world - every object that has at least one instance right now - and each candidate
+//    is checked for `hp` with `variable_instance_exists`, the field test the reference mod
+//    proves the loader knows.
 //
-// 2. *What does a mob look like from here?* The census also prints, **once per line**, the
-//    object index, the name, the instance id and the position of each enemy, and - guarded
-//    by `variable_instance_exists`, the field test the reference mod proves - its `hp` and
-//    `hpMax` if it has them. That answers "can the HP be read at all?" without a guess.
-//
-// The walk reuses the bush census's shape exactly (four parallel arrays, `instance_find`),
-// and for the same reason: nothing here can walk a `ds_map`.
-//
-// **The census is rate-limited and the log is throttled**, because this runs every step:
-// the census itself is a handful of calls, but 60 lines a second of any text is not a
-// diagnostic, it is a wall. Two seconds apart is enough to see a slime appear or die.
-if (global.coopMobObj == -2) {
-    global.coopMobObj = [];
-    var _mob_names = ["parEnemy", "objSlime"];
-    for (var _mn = 0; _mn < array_length(_mob_names); _mn += 1) {
-        var _midx = asset_get_index(_mob_names[_mn]);
-        if (_midx >= 0) array_push(global.coopMobObj, _midx);
+// That is one walk over the objects, kept in `global.coopMobObj`, and it is the same shape
+// the bush census uses: parallel arrays, `instance_find`, nothing that needs a `ds_map`.
+if (!global.coopMobResolved && instance_exists(objPlayer)) {
+    global.coopMobResolved = true;
+    var _all_objs = [];
+    var _n_all = 0;
+    // `instance_number(all)` is the whole live world; asking it per object index would be
+    // thousands of calls, so the objects are taken from the instances themselves.
+    var _cnt_all = instance_number(all);
+    if (_cnt_all > 4000) _cnt_all = 4000;      // the walk is a census, not a sweep of the map
+    for (var _ai = 0; _ai < _cnt_all; _ai += 1) {
+        var _ainst = instance_find(all, _ai);
+        if (!instance_exists(_ainst)) continue;
+        var _aobj = _ainst.object_index;
+        var _known = false;
+        for (var _ak = 0; _ak < _n_all; _ak += 1) {
+            if (_all_objs[_ak] == _aobj) { _known = true; break; }
+        }
+        if (_known) continue;
+        _all_objs[_n_all] = _aobj;
+        _n_all += 1;
+        // Is this object an enemy? Only the field says so.
+        if (variable_instance_exists(_ainst, "hp") && _aobj != objPlayer.object_index) {
+            array_push(global.coopMobObj, _aobj);
+        }
     }
-    Trace("Co-op: enemy census watching " + string(array_length(global.coopMobObj))
-          + " objects: " + string(global.coopMobObj));
+    var _mob_line = "Co-op: enemy census watching " + string(array_length(global.coopMobObj))
+                  + " object(s) out of " + string(_n_all)
+                  + " in the world: " + string(global.coopMobObj);
+    Trace(_mob_line);
+    CoopSendDebugLine(_mob_line);
 }
 if (array_length(global.coopMobObj) > 0 && instance_exists(objPlayer)) {
     var _mob_seen = 0;
@@ -337,30 +360,23 @@ if (array_length(global.coopMobObj) > 0 && instance_exists(objPlayer)) {
 }
 
 // ============================================================================
-// The roll, and the player's own HP (probe, 2026-10-22).
+// The roll probe is **answered** and can go quiet.
 //
-// **Forager's roll has no sprite of its own** - the player's assets are idle and walk plus
-// the costume variants - so the roll is a *spin*, and the spin is `objPlayer.angle`. The
-// puppet is already drawn with the peer's angle, and the owner reports no roll on the
-// puppet, so the question is whether `angle` ever leaves zero at all.
+// The measurement of 2026-10-22 settled it: `objPlayer.angle` never left zero while the
+// owner rolled, and `image_index` ran `5.85 -> 0.00 -> 0.15` instead. So the roll is the
+// **body frame counter**, there is nothing left to probe, and the puppet shows the roll for
+// free now that it is drawn at the peer's interpolated frame.
 //
-// This prints the player's own `angle` and `image_index` for a few seconds **whenever the
-// angle is not zero**, and `image_index` whenever it is a value a frame counter cannot be -
-// the two candidates are "angle is the roll" and "image_index is the roll". Nothing is
-// assumed: if the owner rolls and this stays silent, neither field is the roll, and the
-// next probe has something real to go on.
+// All that is kept is a single line when the angle ever *does* move - the one thing that
+// would mean this build turns its players after all - so the question stays answered
+// without a wall of text.
 if (instance_exists(objPlayer)) {
     var _pa = abs(floor(objPlayer.angle));
-    var _pi = objPlayer.image_index;
-    if (_pa != global.coopProbeAngle || _pi != global.coopProbeImage) {
-        var _worth = (_pa != 0) || (_pi < 0) || (_pi > 16) || (floor(_pi) != _pi);
+    if (_pa != global.coopProbeAngle) {
         global.coopProbeAngle = _pa;
-        global.coopProbeImage = _pi;
-        if (_worth && global.coopProbeTick < 600) {
-            global.coopProbeTick += 1;
-            var _pr_line = "Co-op roll probe: angle " + string(_pa)
-                         + " image_index " + string(_pi)
-                         + " moving " + string(global.coopLastMoved);
+        if (_pa != 0) {
+            var _pr_line = "Co-op: the player's angle moved to " + string(_pa)
+                         + " (until now it has only ever been zero).";
             Trace(_pr_line);
             CoopSendDebugLine(_pr_line);
         }

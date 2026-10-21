@@ -46,15 +46,17 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.66-m5b";
-global.coopProtocol = 8;   // 1 = presence only (M1); 2 adds the world-sync packets;
+global.coopVersion  = "0.0.67-m5c";
+global.coopProtocol = 9;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
                            // 5 adds the player name to HELLO/WELCOME (M3.1);
                            // 6 adds the world snapshot (SNAP_LAND, SNAP_STRUCT);
                            // 7 changes POS: the sprite travels by name, and the
                            //     animation frame and the held item travel with it;
-                           // 8 adds MOB, the enemies appearing and dying
+                           // 8 adds MOB, the enemies appearing and dying;
+                           // 9 carries the animation frame in hundredths - the frame
+                           //     is a timer in this build, and a byte quantised the walk
                            //
                            // The number moves when the **wire format** moves, not when a
                            // feature is added. 5 was free again after a rejected CMD
@@ -150,30 +152,16 @@ global.coopBodyTried = false;
 // peer) could not send a walking sprite at all. The names are asset names, not display
 // strings, so they are not localized.
 global.coopWalkSprite = -1;
-global.coopPeerFrame = 0;
+global.coopPeerFrame = 0;      // the peer's frame, as reported (a fraction in this build)
 global.coopPeerHold = -1;
-// M3.4: the animation is run **locally**, not played back from the packets.
-//
-// The peer says which sprite it is on ("walk" / "idle") and which frame the game drew it
-// with. The frame is used to learn **how many frames the cycle has** - the biggest frame
-// the peer has ever shown - and the cycle itself is advanced here, at the game's own rate.
-// Otherwise the puppet would move at the rate the packets arrive (20/s) instead of at the
-// rate the game draws (60/s), and it would look like a slideshow next to the player.
-global.coopWalkMax = 0;
-global.coopIdleMax = 0;
+// M3.4: the puppet's animation. **The local cycle is gone** (2026-10-22): a probe showed
+// the peer's own `image_index` is a *timer*, and the puppet is now drawn at the peer's
+// interpolated frame instead of on a cycle of its own - see the frame block further down.
 global.coopPeerWalking = false;
-global.coopAnimFrame = 0;
-global.coopAnimTick = 0;
-global.coopAnimStep = 6;      // the game advances a walk frame about every 6th frame
-                              // **measured from the wire, 2026-10-22**: the peer's own
-                              // POS showed `frame 2` twice 7 px apart at 20 packets/s, so
-                              // the game holds a walk frame ~6 game-frames, which is what
-                              // the puppet's own cycle now runs at. It was 4, which ran the
-                              // puppet ~1.5x too fast and is what the owner saw as the
-                              // puppet "not agreeing" with the player beside it.
-global.coopAnimWalking = false;
 global.coopDustSprite = -1;
 global.coopDustLastFrame = -1;
+global.coopDustFrame = 0;      // the frame the puff is on - the dust has its own animation
+global.coopDustFrames = 0;     // how many frames that animation has
 // M3.4: the puppet's **drawn** position, which walks toward the reported one.
 //
 // The positions arrive twenty times a second and the game draws sixty times a second, so
@@ -251,14 +239,24 @@ global.coopBushObj    = -2;     // -2 = unresolved, -1 = no such object in this 
 global.coopMobObj   = -2;   // -2 = unresolved; else the list of enemy object indices
 global.coopMobTick  = 0;    // steps since the census started
 global.coopMobSeen  = -1;   // how many enemies the census saw when it last reported
+global.coopMobResolved = false;  // the watch list is built from the live world, once
 
-// --- The roll / player-HP probe (2026-10-22) -------------------------------------------
-// Prints the player's own `angle` and `image_index` when either is worth looking at, so a
-// live roll says once and for all whether the game's roll is the angle (a spin) or the
-// frame counter.
+// --- the puppet's frame (M3.4 fix, 2026-10-22) -----------------------------------------
+// `image_index` is a **timer** in this build, not an integer: the peer's own POS showed it
+// climbing `0.00 0.15 0.30 … 5.85 0.00`. So the frame travels as a fraction, and the far
+// end carries it between packets at the rate the packets themselves measure.
+global.coopPeerFrameF    = 0;     // the peer's frame as reported, in frames (fractional)
+global.coopPeerFrameAt   = 0;     // when that report arrived, for the rate below
+global.coopPeerFrameRate = 0;     // frames per millisecond, measured from the packets
+global.coopFrameFloat    = 0;     // the puppet's own carried frame
+global.coopFrameSnap     = true;  // true until a rate is known
+global.coopLoopLen       = 0;     // the cycle's length, learned when the peer's frame wraps
+global.coopFrameWraps    = 0;     // how many wraps seen, so the length is written once
+
+// --- The roll probe (answered 2026-10-22) -----------------------------------------------
+// Prints a single line if the player's `angle` ever leaves zero. It never has: the roll is
+// the body frame counter, so this stays quiet unless the build surprises us.
 global.coopProbeAngle = 0;
-global.coopProbeImage = 0;
-global.coopProbeTick  = 0;
 
 global.coopPingNonce   = 0;
 global.coopPingSentAt  = -1;

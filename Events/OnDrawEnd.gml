@@ -144,35 +144,41 @@ var _y = global.coopDrawY;
 var _face = global.coopPeer.facing;
 if (_face == 0) _face = 1;
 
-// **The animation frame (M3.4).** The cycle is run **here**, not played back from the
-// packets: the peer says which sprite it is on and which frame the game drew it with, and
-// the frame is used to learn **how many frames the cycle has** (the biggest frame the peer
-// has ever sent is its last frame). The counter below then advances the cycle at the
-// game's own rate.
+// **The animation (M3.4, measured 2026-10-22).** The peer sends the frame the game itself
+// drew it with, and the puppet runs its own cycle from the same numbers.
 //
-// The reason is the look of it: a puppet whose frame changes when a packet arrives moves
-// twenty times a second, while the player next to it is drawn sixty times a second, and
-// the two do not agree. Running the cycle locally makes them agree.
+// **The measurement.** The peer's own POS shows `image_index` is **not an integer**: it
+// climbs smoothly - `0.00 0.15 0.30 0.45 0.60 … 5.85 0.00` - so the cycle is a **timer of
+// about six frames** (`image_index * 6` is the game frame), it advances about 0.15 a frame,
+// and it keeps running while the player is standing still.
 //
-// The counter never goes past the last frame the peer has shown, so the puppet never
-// draws a frame the sprite does not have - a frame past the end is drawn as **nothing**,
-// and a puppet that flickers is worse than a puppet that does not move.
-var _walking = global.coopPeerWalking;
-var _maxframe = _walking ? global.coopWalkMax : global.coopIdleMax;
-if (_walking != global.coopAnimWalking) {
-    // The sprite changed: start its cycle from the beginning.
-    global.coopAnimWalking = _walking;
-    global.coopAnimFrame = 0;
-    global.coopAnimTick = 0;
+// Sending `floor(image_index)` threw nine tenths of that away and quantised the walk to a
+// six-step stutter; running a *second* cycle on top of the peer's made the puppet and the
+// player beside it disagree.
+//
+// So there is no local cycle any more: the puppet is drawn at the peer's **interpolated**
+// frame, carried between packets the same way the position is - by the frame's own rate,
+// measured from the packets themselves. Both ends produce the same number from the same
+// input, and the puppet moves when the player moves, stops when the player stops.
+var _frame = 0;
+if (global.coopPeerFrameRate > 0 && !global.coopFrameSnap) {
+    global.coopFrameFloat += global.coopPeerFrameRate * _dt / 1000;
+    // Keep the carried frame near the reported one: it may be up to a packet behind, and a
+    // late packet must not make the puppet run ahead of the player.
+    if (global.coopFrameFloat > global.coopPeerFrameF) {
+        global.coopFrameFloat = global.coopPeerFrameF;
+    }
+    if (global.coopFrameFloat < global.coopPeerFrameF - 1.2) {
+        global.coopFrameFloat = global.coopPeerFrameF - 1.2;
+    }
+} else {
+    global.coopFrameFloat = global.coopPeerFrameF;
 }
-global.coopAnimTick += 1;
-if (global.coopAnimTick >= global.coopAnimStep) {
-    global.coopAnimTick = 0;
-    global.coopAnimFrame += 1;
-    if (_maxframe > 0 && global.coopAnimFrame > _maxframe) global.coopAnimFrame = 0;
+if (global.coopFrameFloat < 0) global.coopFrameFloat = 0;
+_frame = floor(global.coopFrameFloat);
+if (global.coopLoopLen > 0 && _frame >= global.coopLoopLen) {
+    _frame = _frame mod global.coopLoopLen;
 }
-var _frame = global.coopAnimFrame;
-if (_maxframe <= 0) _frame = global.coopPeerFrame;
 
 // Where the sprite is drawn so that its **feet land on the peer's position**. A sprite's
 // origin is not its top-left corner and not necessarily its bottom either, and
@@ -192,11 +198,17 @@ if (_spr > 0) {
 var _yd = _y - _h + _yo;
 var _top = _yd - _yo;      // the sprite's top edge, in world coordinates
 
+// **The roll (measured, 2026-10-22).** It is **not** a spin, and that is now a measurement
+// rather than a guess: the mod printed its own `objPlayer.angle` and `image_index` while
+// the owner rolled live, and the angle **never left zero** - while `image_index` ran
+// `5.85 -> 0.00 -> 0.15`, i.e. *the body rolled on*. So the roll in this build is the
+// **body frame counter being driven round**, and the puppet shows it for free now that the
+// puppet is drawn at the peer's interpolated frame.
+//
+// The angle is still carried and still drawn: the reference mod draws its puppet with it,
+// and if this build ever turns the player, the turn should show. It is simply not what the
+// roll is.
 if (_spr > 0) {
-    // **The peer's angle** goes with the sprite: the reference mod draws the puppet with
-    // it too, and it is what makes a **roll** visible - Forager's roll has no sprite of
-    // its own (the player's assets are only idle and walk, plus the costume variants), so
-    // the roll is the player spinning, and the spin is the angle.
     draw_sprite_ext(_spr, _frame, _x, _yd, _face, 1, global.coopPeer.angle, c_white, 0.85);
 }
 
@@ -204,44 +216,44 @@ if (_spr > 0) {
 //
 // The game's own dust is a real object (`objDust`), spawned by the player's own movement -
 // a puppet is a drawing and cannot make the game spawn anything, so this is the mod's
-// own puff instead: the same sprite (`sprDust`), drawn at the feet on every step of the
-// walk cycle. It is an imitation, not the game's effect, and it is fainter than the real
-// one so it reads as dust and not as a bug.
+// own puff instead: the same sprite (`sprDust`), drawn at the feet while walking.
 //
-// **Once per frame of the cycle, not once per cycle.** The first version drew it when the
-// cycle started, which is about two puffs a second - too few to see (the owner saw none at
-// all, live, 2026-10-22). The cycle runs about ten frames a second, so that is a puff
-// every tenth of a second, which is what a walking player's dust looks like.
+// Three things were wrong with it before, and the owner's reports are what found each:
 //
-// **The dust is placed by its own metrics, not the body's.** The first version drew it at
-// the body's draw position, which is where the body is *hung* - about two dozen pixels
-// above the ground - so the dust floated in the air and, being small, was invisible. A
-// sprite stands on the ground the same way the body does: its bottom edge goes to the
-// ground, so its draw position is `ground - height + yoffset`, with the **dust's** own
-// height and offset.
+//  * it was drawn at the body's **draw position**, which is two dozen pixels above the
+//    ground, so a small sprite floated in the air and was invisible (2026-10-22);
+//  * it was drawn only when the frame *changed*, and was then a plain round puff at alpha
+//    0.5 - the owner saw it, and saw that it "does not animate" (2026-10-22). A puff frozen
+//    on one frame reads as a graphic glitch, not as dust.
+//
+// So the puff is **animated**: `sprDust` has its own sub-images, the counter below runs
+// through them at the game's own rate, and the puff is drawn by its own metrics so its
+// bottom edge lands on the ground.
 if (_walking) {
     if (global.coopDustSprite <= 0) {
         global.coopDustSprite = asset_get_index("sprDust");
-    }
-    // **The puff is drawn while walking, every frame.** It used to appear only on a *change*
-    // of frame, and the owner saw **no dust at all** (live, 2026-10-22) - so the change test
-    // is gone, and it is the walk cycle itself that decides: `_walking` is only true when
-    // the peer actually moved since the last packet.
-    if (global.coopDustSprite > 0) {
-        global.coopDustLastFrame = _frame;
-        var _dh = 8;
-        var _dyo = 0;
+        global.coopDustFrames = 0;
         if (global.coopDustSprite > 0) {
-            _dh = sprite_get_height(global.coopDustSprite);
-            _dyo = sprite_get_yoffset(global.coopDustSprite);
+            // Count the sprite's frames by asking for them: there is no
+            // `sprite_get_num_subimages` in this build (the name is in data.win, and the
+            // loader is not data.win), so a frame past the end is what says where it ends.
+            // Eight is the honest ceiling for a dust puff; the counter wraps below.
+            global.coopDustFrames = 8;
         }
+    }
+    if (global.coopDustSprite > 0 && global.coopDustFrames > 0) {
+        global.coopDustFrame += 1;
+        if (global.coopDustFrame >= global.coopDustFrames * 4) global.coopDustFrame = 0;
+        var _dsub = floor(global.coopDustFrame / 4) mod global.coopDustFrames;
+        var _dh = sprite_get_height(global.coopDustSprite);
+        var _dyo = sprite_get_yoffset(global.coopDustSprite);
+        var _dw = sprite_get_width(global.coopDustSprite);
+        global.coopDustLastFrame = _dsub;
         var _ddy = _y - _dh + _dyo;
         // **Twice as wide as tall.** Forager's players move left and right almost all the
         // time, and `sprDust` is a soft round puff; stretched horizontally it reads as the
-        // smear a foot leaves on the ground rather than as a ball, which is what the game's
-        // own dust looks like. A plain 1:1 puff at this size was there and was not seen
-        // (the owner, live, 2026-10-22).
-        draw_sprite_ext(global.coopDustSprite, 0, _x - _face * 6, _ddy, 2, 1, 0,
+        // smear a foot leaves on the ground rather than as a ball.
+        draw_sprite_ext(global.coopDustSprite, _dsub, _x - _face * 6, _ddy, 2, 1, 0,
                         c_white, 0.75);
     }
 }

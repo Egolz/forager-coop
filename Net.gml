@@ -1977,11 +1977,23 @@ switch (_cmd) {
         global.coopPeer.angle  = buffer_read(_buf, buffer_u16);
         global.coopPeer.facing = buffer_read(_buf, buffer_s8);
         // The sprite **by name** (M3.4), the animation frame and the held item.
-        global.coopPeer.sprite = CoopResolvePeerSprite(buffer_read(_buf, buffer_string));
+        var _ps_name = buffer_read(_buf, buffer_string);
+        global.coopPeer.sprite = CoopResolvePeerSprite(_ps_name);
         global.coopPeerFrame   = buffer_read(_buf, buffer_u8);
         global.coopPeer.room   = buffer_read(_buf, buffer_u8);
         global.coopPeerHold    = buffer_read(_buf, buffer_u16);
         global.coopPeer.seen   = true;
+        // **Learn how many frames the cycle has.** The peer sends the frame the game drew
+        // it with, and the biggest frame it has ever sent is the last frame of the cycle.
+        // That is what lets the local animation cycle without ever drawing a frame that
+        // does not exist - a frame past the end of the sprite is drawn as nothing, and a
+        // puppet that flickers is worse than a puppet that does not move.
+        global.coopPeerWalking = (_ps_name == "walk");
+        if (global.coopPeerWalking) {
+            if (global.coopPeerFrame > global.coopWalkMax) global.coopWalkMax = global.coopPeerFrame;
+        } else {
+            if (global.coopPeerFrame > global.coopIdleMax) global.coopIdleMax = global.coopPeerFrame;
+        }
         break;
 
     case CoopCmd.BYE:

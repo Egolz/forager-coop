@@ -585,6 +585,9 @@ class Peer:
         # M3.4: the animation frame the mock is on, and the item it holds (65535 = none).
         self.frame = 0
         self.hold_item = 65535
+        self.moving = False
+        self.last_px = -1
+        self.last_py = -1
         self.host_spot: tuple[int, int] | None = None   # where the host stands
         # The scripted loot is **destructive in a live world** - a drop at a fixed tile makes
         # the game spawn a pickup inside whatever stands there, and the tree it was in goes.
@@ -966,10 +969,21 @@ class Peer:
         self.host_spot = (px, py)
         hx, hy = self.host_spot
         # **The animation (M3.4).** The mock has no body of its own, but it can still say
-        # that it is walking and which frame of the walk cycle it is on - and that is
-        # what makes the puppet on the other side move its legs instead of sliding.
-        self.frame = (self.frame + 1) % 4
-        self.send(pos(hx, hy, angle=0, facing=1, sprite="walk", image=self.frame,
+        # whether it is moving and which frame of the cycle it is on - and that is what
+        # makes the puppet on the other side move its legs instead of sliding.
+        #
+        # **It says "idle" when it has not moved.** The mock stands on the player's own
+        # cell (the game spawns nothing there), so it only moves when the player does - and
+        # a puppet that walks forever while standing still is the mock's oldest lie.
+        if (px != self.last_px or py != self.last_py):
+            self.last_px = px
+            self.last_py = py
+            self.moving = True
+        else:
+            self.moving = False
+        self.frame = (self.frame + 1) % 4 if self.moving else 0
+        self.send(pos(hx, hy, angle=0, facing=1,
+                      sprite="walk" if self.moving else "idle", image=self.frame,
                       room=self.room, hold=self.hold_item))
         # M3.1: the world snapshot. The mock has no world, so it sends the one cell it
         # knows is land - the cell under the player - with the "remove what the host

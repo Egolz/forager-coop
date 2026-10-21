@@ -78,11 +78,35 @@ var _y = global.coopStandY;
 var _face = global.coopPeer.facing;
 if (_face == 0) _face = 1;
 
-// **The animation frame (M3.4).** The peer sends the frame it is on, and the frame belongs
-// to the sprite it sent, so the two travel together: the game draws the player with
-// `objPlayer.image_index` and sends the same number, and a peer that is not the game sends
-// a frame of the walk cycle.
-var _frame = global.coopPeerFrame;
+// **The animation frame (M3.4).** The cycle is run **here**, not played back from the
+// packets: the peer says which sprite it is on and which frame the game drew it with, and
+// the frame is used to learn **how many frames the cycle has** (the biggest frame the peer
+// has ever sent is its last frame). The counter below then advances the cycle at the
+// game's own rate.
+//
+// The reason is the look of it: a puppet whose frame changes when a packet arrives moves
+// twenty times a second, while the player next to it is drawn sixty times a second, and
+// the two do not agree. Running the cycle locally makes them agree.
+//
+// The counter never goes past the last frame the peer has shown, so the puppet never
+// draws a frame the sprite does not have - a frame past the end is drawn as **nothing**,
+// and a puppet that flickers is worse than a puppet that does not move.
+var _walking = global.coopPeerWalking;
+var _maxframe = _walking ? global.coopWalkMax : global.coopIdleMax;
+if (_walking != global.coopAnimWalking) {
+    // The sprite changed: start its cycle from the beginning.
+    global.coopAnimWalking = _walking;
+    global.coopAnimFrame = 0;
+    global.coopAnimTick = 0;
+}
+global.coopAnimTick += 1;
+if (global.coopAnimTick >= global.coopAnimStep) {
+    global.coopAnimTick = 0;
+    global.coopAnimFrame += 1;
+    if (_maxframe > 0 && global.coopAnimFrame > _maxframe) global.coopAnimFrame = 0;
+}
+var _frame = global.coopAnimFrame;
+if (_maxframe <= 0) _frame = global.coopPeerFrame;
 
 // Where the sprite is drawn so that its **feet land on the peer's position**. A sprite's
 // origin is not its top-left corner and not necessarily its bottom either, and
@@ -103,7 +127,28 @@ var _yd = _y - _h + _yo;
 var _top = _yd - _yo;      // the sprite's top edge, in world coordinates
 
 if (_spr > 0) {
-    draw_sprite_ext(_spr, _frame, _x, _yd, _face, 1, 0, c_white, 0.85);
+    // **The peer's angle** goes with the sprite: the reference mod draws the puppet with
+    // it too, and it is what makes a **roll** visible - Forager's roll has no sprite of
+    // its own (the player's assets are only idle and walk, plus the costume variants), so
+    // the roll is the player spinning, and the spin is the angle.
+    draw_sprite_ext(_spr, _frame, _x, _yd, _face, 1, global.coopPeer.angle, c_white, 0.85);
+}
+
+// **The dust the player kicks up while walking.**
+//
+// The game's own dust is a real object (`objDust`), spawned by the player's own movement -
+// a puppet is a drawing and cannot make the game spawn anything, so this is the mod's
+// own puff instead: the same sprite (`sprDust`), drawn at the feet once per step of the
+// walk cycle. It is an imitation, not the game's effect, and it is fainter than the real
+// one so it reads as dust and not as a bug.
+if (_walking) {
+    if (global.coopDustSprite <= 0) {
+        global.coopDustSprite = asset_get_index("sprDust");
+    }
+    if (global.coopDustSprite > 0 && _frame == 0) {
+        draw_sprite_ext(global.coopDustSprite, 0, _x - _face * 5, _yd, 1, 1, 0,
+                        c_white, 0.35);
+    }
 }
 
 // **The item in the peer's hand (M3.4).** The peer sends the item's **id**, and the

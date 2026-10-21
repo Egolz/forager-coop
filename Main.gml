@@ -44,7 +44,7 @@ enum CoopCmd {
     SNAP_STRUCT      = 18   // host -> client: a chunk of the world's structures
 }
 
-global.coopVersion  = "0.0.61-m4a";
+global.coopVersion  = "0.0.62-m4b";
 global.coopProtocol = 7;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -147,6 +147,21 @@ global.coopBodyTried = false;
 global.coopWalkSprite = -1;
 global.coopPeerFrame = 0;
 global.coopPeerHold = -1;
+// M3.4: the animation is run **locally**, not played back from the packets.
+//
+// The peer says which sprite it is on ("walk" / "idle") and which frame the game drew it
+// with. The frame is used to learn **how many frames the cycle has** - the biggest frame
+// the peer has ever shown - and the cycle itself is advanced here, at the game's own rate.
+// Otherwise the puppet would move at the rate the packets arrive (20/s) instead of at the
+// rate the game draws (60/s), and it would look like a slideshow next to the player.
+global.coopWalkMax = 0;
+global.coopIdleMax = 0;
+global.coopPeerWalking = false;
+global.coopAnimFrame = 0;
+global.coopAnimTick = 0;
+global.coopAnimStep = 6;      // the game advances a walk frame about every 6th frame
+global.coopAnimWalking = false;
+global.coopDustSprite = -1;
 // The last position we sent, to tell "walking" from "standing still": the player's
 // sprite is idle or walk, and the instance does not carry it (the body is drawn from a
 // constant asset), so the movement is what says which.

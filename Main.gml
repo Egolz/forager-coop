@@ -41,7 +41,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.44-m3j";
+global.coopVersion  = "0.0.45-m3k";
 global.coopProtocol = 5;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -105,6 +105,11 @@ global.coopPeerVersion = "";
 // it arrives before the first puppet is ever drawn.
 global.coopName     = "player";  // what we call ourselves; see CoopLocalName below
 global.coopPeerName = "";        // what the peer called themselves ("peer" until known)
+// M3.1: the handshake is retried until the host answers, because the client's async connect
+// event did not arrive on the live run of 2026-10-21 - and with no WELCOME, nothing the mod
+// can send is sent. `coopHelloAt` paces the retry, `coopHelloTries` bounds it.
+global.coopHelloAt   = 0;
+global.coopHelloTries = 0;
 // M3.1: the body sprite is resolved by **name** (`sprPlayerIdle`), because the player's
 // instance reports `sprite_index` 0 - the live body probe of 2026-10-21 found the whole
 // instance chain (parEntity #20, objPlayer #22, parAlly #46) with a sprite index of 0, while

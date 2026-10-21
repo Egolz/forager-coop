@@ -176,8 +176,12 @@ if (_ip == "") exit;
 global.coopSocket = network_create_socket(network_socket_tcp);
 if (global.coopSocket < 0) { Trace("Co-op: could not create a socket."); exit; }
 global.coopSocketOwned = true;   // we made this one, so we must destroy it - see CoopResetPeer
+global.coopHelloAt    = 0;      // the hello retry starts fresh
+global.coopHelloTries = 0;
 
 var _r = network_connect(global.coopSocket, _ip, global.coopPort);
+Trace("Co-op: connect to " + _ip + ":" + string(global.coopPort) + " returned "
+      + string(_r) + " on socket " + string(global.coopSocket) + ".");
 if (_r < 0) {
     Trace("Co-op: connect to " + _ip + ":" + string(global.coopPort) + " FAILED (rc="
           + string(_r) + ").");
@@ -187,7 +191,8 @@ if (_r < 0) {
     exit;
 }
 Trace("Co-op: connecting to " + _ip + ":" + string(global.coopPort)
-      + " - the connection is up when the async event says so.");
+      + " - the connection is up when the async event says so, and the hello is retried "
+      + "until the host answers.");
 
 #define CoopDisconnect(_why)
 if (!global.coopConnected && !global.coopIsHost) { Trace("Co-op: not connected."); exit; }

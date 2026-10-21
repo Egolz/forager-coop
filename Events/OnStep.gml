@@ -39,6 +39,37 @@ if (instance_exists(objTransition) && objTransition.target == rmInputSelect) {
     if (global.coopConnected || global.coopIsHost) CoopDisconnect("save and quit");
 }
 
+// ---------------------------------------------------------------------------
+// **Keep saying hello until the host answers.**
+//
+// The handshake used to depend on one thing: the async connect event. On the client side that
+// event did not arrive - the live run of 2026-10-21 showed the host accepting the connection
+// and completing GameMaker's own handshake, while the mod never sent a HELLO and never heard
+// a WELCOME. Since `global.coopPeerAlive` is set by the WELCOME, nothing else the mod does
+// can be sent either: the placement intent, the loot, the position. One missing event froze
+// the whole client.
+//
+// So the hello is not an event, it is a **retry**: it goes out every second until the host
+// answers with a WELCOME. The event still sends the first one immediately, and the retry
+// covers the case where it does not.
+//
+// The retry only runs while a socket exists and we are not the host, so it cannot talk to
+// anybody by accident. It is bounded, because a socket that never connects would otherwise be
+// written to forever, and it is paced by the clock rather than by the tick counter - the tick
+// stops advancing while the peer is not alive, because that is what the gate below does.
+if (global.coopSocket >= 0 && !global.coopIsHost && !global.coopPeerAlive
+    && global.coopHelloTries < 30) {
+    if (current_time - global.coopHelloAt >= 1000) {
+        global.coopHelloAt = current_time;
+        global.coopHelloTries += 1;
+        if (global.coopHelloTries > 1) {
+            Trace("Co-op: still no welcome from the host - saying hello again ("
+                  + string(global.coopHelloTries) + ").");
+        }
+        CoopSendHello();
+    }
+}
+
 if (!global.coopPeerAlive) exit;
 
 // **"Am I in a world?" is asked here, not remembered from a room event.** A flag set by

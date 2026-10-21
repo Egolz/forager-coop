@@ -2003,6 +2003,29 @@ switch (_cmd) {
         global.coopPeer.room   = buffer_read(_buf, buffer_u8);
         global.coopPeerHold    = buffer_read(_buf, buffer_u16);
         global.coopPeer.seen   = true;
+        // **How fast the peer is moving.** The puppet does not stand at the reported
+        // position: the positions arrive twenty times a second and the game draws sixty
+        // times a second, so a puppet at the reported position moves in steps - and a
+        // **roll** (three cells in one go) would be a teleport. The speed is measured here,
+        // from the peer's own movement between two packets, and the puppet walks toward
+        // the reported position at that speed.
+        var _ps_now = current_time;
+        if (global.coopPeerPrevAt > 0) {
+            var _ps_dx = global.coopPeer.x - global.coopPeerPrevX;
+            var _ps_dy = global.coopPeer.y - global.coopPeerPrevY;
+            var _ps_dt = _ps_now - global.coopPeerPrevAt;
+            if (_ps_dt > 0) {
+                // `point_distance` and not `sqrt`: the first is already used by this mod
+                // and is proven in the live build, the second is a GML builtin whose
+                // presence in this loader is not.
+                var _ps_d = point_distance(global.coopPeer.x, global.coopPeer.y,
+                                           global.coopPeerPrevX, global.coopPeerPrevY);
+                global.coopPeerSpeed = _ps_d / _ps_dt;
+            }
+        }
+        global.coopPeerPrevX = global.coopPeer.x;
+        global.coopPeerPrevY = global.coopPeer.y;
+        global.coopPeerPrevAt = _ps_now;
         // **Learn how many frames the cycle has.** The peer sends the frame the game drew
         // it with, and the biggest frame it has ever sent is the last frame of the cycle.
         // That is what lets the local animation cycle without ever drawing a frame that

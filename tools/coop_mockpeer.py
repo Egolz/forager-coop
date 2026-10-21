@@ -590,6 +590,7 @@ class Peer:
         self.last_py = -1
         self.angle = 0
         self.spin = False
+        self.facing = 1
         self.host_spot: tuple[int, int] | None = None   # where the host stands
         # The scripted loot is **destructive in a live world** - a drop at a fixed tile makes
         # the game spawn a pickup inside whatever stands there, and the tree it was in goes.
@@ -845,6 +846,10 @@ class Peer:
         elif name == "POS":
             self.room = pkt["room"]          # mirror the game's room back to it
             self.player = (pkt["x"], pkt["y"])
+            # **The facing.** Forager turns the character toward the cursor, so the game's
+            # own `facing` already says which way the owner is looking - and the puppet
+            # on the other side has to turn the same way. The mock mirrors it.
+            self.facing = pkt["facing"]
             # The host streams this ~20 times a second (the animation frame
             # changes every tick), so log only real movement - otherwise a live
             # log is one long wall of identical lines and the interesting packet
@@ -990,7 +995,7 @@ class Peer:
         # path can be seen without a second human.
         if self.spin:
             self.angle = (self.angle + 15) % 360
-        self.send(pos(hx, hy, angle=self.angle, facing=1,
+        self.send(pos(hx, hy, angle=self.angle, facing=self.facing,
                       sprite="walk" if self.moving else "idle", image=self.frame,
                       room=self.room, hold=self.hold_item))
         # M3.1: the world snapshot. The mock has no world, so it sends the one cell it

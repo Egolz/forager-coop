@@ -70,8 +70,54 @@ if (_spr <= 0) {
 // player stands on, and that is what keeps ore off the mock (live, 2026-10-21).
 // See CoopStandSpot.
 CoopStandSpot(global.coopPeer.x, global.coopPeer.y, 0);
-var _x = global.coopStandX;
-var _y = global.coopStandY;
+
+// **The puppet's own position, which walks toward the reported one.**
+//
+// The positions arrive twenty times a second and the game draws sixty times a second, so
+// a puppet drawn at the reported position moves in visible steps - and a **roll** (three
+// cells in one go, in one packet) would be a teleport rather than a roll.
+//
+// So the puppet has a position of its own and moves toward the reported one at the speed
+// the peer is actually moving - the speed is measured on the far end, from the peer's own
+// movement between two packets. The step is capped so a lost packet cannot send the
+// puppet across the island, and the puppet never goes past the target.
+var _tx = global.coopStandX;
+var _ty = global.coopStandY;
+if (!global.coopDrawInit) {
+    global.coopDrawX = _tx;
+    global.coopDrawY = _ty;
+    global.coopDrawInit = true;
+}
+var _dx = _tx - global.coopDrawX;
+var _dy = _ty - global.coopDrawY;
+var _dist = point_distance(global.coopDrawX, global.coopDrawY, _tx, _ty);
+if (_dist > 0.01) {
+    // How far this frame may go: the peer's own speed, over the time since the last
+    // frame. The step is capped so a lost packet cannot send the puppet across the
+    // island, and the puppet never goes past the target.
+    var _now = current_time;
+    var _dt = global.coopDrawAt > 0 ? (_now - global.coopDrawAt) : 16;
+    global.coopDrawAt = _now;
+    if (_dt < 1) _dt = 1;
+    if (_dt > 100) _dt = 100;
+    var _step = global.coopPeerSpeed * _dt;
+    if (_step > 24) _step = 24;
+    if (_step < 0) _step = 0;
+    if (global.coopPeerSpeed <= 0.001) {
+        // The peer is standing still: settle on the reported spot.
+        global.coopDrawX = _tx;
+        global.coopDrawY = _ty;
+    } else if (_step >= _dist) {
+        // Close enough: land on it.
+        global.coopDrawX = _tx;
+        global.coopDrawY = _ty;
+    } else {
+        global.coopDrawX += _dx / _dist * _step;
+        global.coopDrawY += _dy / _dist * _step;
+    }
+}
+var _x = global.coopDrawX;
+var _y = global.coopDrawY;
 
 // Facing is signed (1 right, -1 left) and scales x only, exactly as the game draws its own
 // player. Alpha is passed per call: no global draw state is touched, so nothing to restore.

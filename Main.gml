@@ -44,7 +44,7 @@ enum CoopCmd {
     SNAP_STRUCT      = 18   // host -> client: a chunk of the world's structures
 }
 
-global.coopVersion  = "0.0.63-m4c";
+global.coopVersion  = "0.0.64-m4d";
 global.coopProtocol = 7;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -165,6 +165,20 @@ global.coopAnimStep = 6;      // the game advances a walk frame about every 6th 
 global.coopAnimWalking = false;
 global.coopDustSprite = -1;
 global.coopDustLastFrame = -1;
+// M3.4: the puppet's **drawn** position, which walks toward the reported one.
+//
+// The positions arrive twenty times a second and the game draws sixty times a second, so
+// a puppet drawn at the reported position moves in steps - and a **roll** (three cells in
+// one go) would be a teleport. So the puppet has a position of its own and moves toward
+// the reported one at the speed the peer is actually moving.
+global.coopDrawX = 0;
+global.coopDrawY = 0;
+global.coopDrawInit = false;
+global.coopPeerPrevX = 0;
+global.coopPeerPrevY = 0;
+global.coopPeerPrevAt = 0;
+global.coopPeerSpeed = 0;     // px per millisecond, measured from the peer's own moves
+global.coopDrawAt = 0;       // when the puppet was last moved, for its own step
 // The last position we sent, to tell "walking" from "standing still": the player's
 // sprite is idle or walk, and the instance does not carry it (the body is drawn from a
 // constant asset), so the movement is what says which.

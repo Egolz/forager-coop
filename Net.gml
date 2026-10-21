@@ -283,31 +283,39 @@ if (!global.coopBodyTried) {
     if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("Player Idle");
 }
 
-#define CoopStandSpot(_x, _y)
-// Where the peer may be **drawn**: the reported position if a body could stand there, else
-// the nearest cell where one could. Sets `global.coopStandX` / `global.coopStandY`.
+#define CoopStandSpot(_x, _y, _mode)
+// Where a peer or a structure may be **put**: the reported position if it can go there,
+// else the nearest place where it can. Sets `global.coopStandX` / `global.coopStandY`.
 //
 // The mock peer has no physics, so it reports a position that can be inside a tree or in the
-// water - the owner saw exactly that ("the mock can spawn in an impossible spot"). The host
-// knows the world, so the host decides: a peer is drawn on ground a body could stand on.
+// water - the owner saw exactly that. The host knows the world, so the host decides.
 //
-// The two questions are the ones the placement check already asks: water by
-// `WaterCollision` (the game's own answer, measured live), occupied ground by
-// `CoopSolidInCell` - a **cell** membership test, not a radius, on the world's 16 px cells.
+// **The two modes are not the same question, and confusing them was a real bug** (the owner
+// saw furnaces half a cell off the lattice and standing in trees, 2026-10-21):
 //
-// The search is a spiral over **cells**, so the answer lands on the lattice rather than
-// between two cells, and it is cached by the peer's cell: the peer standing still does not
-// make the host search every frame.
+//   mode 0 - a **peer**. Its position is wherever the peer stands, which is not on the
+//     lattice at all, so the search starts at its exact coordinates and moves by whole cells:
+//     the remainder is kept and only the cell the peer stands in has to be free.
 //
-// The radius is **six cells** (96 px). Two was not enough: a peer standing in the middle of
-// a lake had no free cell within reach, so the host kept the position it was given and the
-// puppet stood in the water. Six cells finds ground around any ordinary pond, and the spiral
-// takes the **nearest** free cell, so the peer is only moved as far as it has to be.
-var _ss_key = string(floor(_x / 16)) + "," + string(floor(_y / 16));
+//   mode 1 - a **structure**. A structure stands on the **corner** of a cell (x mod 16 = 0)
+//     and covers a **2x2 block** of cells centred on that corner - so the cells it covers are
+//     the ones whose centres are at +/-8 from it. That is exactly what the host's own
+//     placement check asks about, and starting the search at a cell *centre* put the
+//     structure half a cell off the lattice and right on top of the trees.
+//
+// The search is a spiral over cells and is cached by the peer's cell, so a peer standing
+// still does not make the host search every frame. The radius is **six cells** (96 px): two
+// was not enough, because a peer in the middle of a lake had no free cell within reach.
+var _ss_key = string(floor(_x / 16)) + "," + string(floor(_y / 16)) + "," + string(_mode);
 if (_ss_key != global.coopStandKey) {
     global.coopStandKey = _ss_key;
-    var _ss_ox = floor(_x / 16) * 16 + 8;   // the cell's centre
-    var _ss_oy = floor(_y / 16) * 16 + 8;
+    // The base: the peer's own position for a peer, the cell's **corner** for a structure.
+    var _ss_ox = _x;
+    var _ss_oy = _y;
+    if (_mode == 1) {
+        _ss_ox = round(_x / 16) * 16;
+        _ss_oy = round(_y / 16) * 16;
+    }
     var _ss_done = false;
     for (var _ss_r = 0; _ss_r <= 6 && !_ss_done; _ss_r += 1) {
         for (var _ss_dy = -_ss_r; _ss_dy <= _ss_r && !_ss_done; _ss_dy += 1) {
@@ -316,8 +324,23 @@ if (_ss_key != global.coopStandKey) {
                 if (_ss_r > 0 && abs(_ss_dx) != _ss_r && abs(_ss_dy) != _ss_r) continue;
                 var _ss_cx = _ss_ox + _ss_dx * 16;
                 var _ss_cy = _ss_oy + _ss_dy * 16;
-                if (WaterCollision(_ss_cx, _ss_cy) != 0) continue;
-                if (CoopSolidInCell(_ss_cx, _ss_cy) != 0) continue;
+                var _ss_free = true;
+                if (_mode == 1) {
+                    // The structure's 2x2 footprint: the four cells whose centres are at
+                    // +/-8 from the corner - the same question the host asks.
+                    for (var _ss_fx = -1; _ss_fx <= 1 && _ss_free; _ss_fx += 2) {
+                        for (var _ss_fy = -1; _ss_fy <= 1 && _ss_free; _ss_fy += 2) {
+                            var _ss_sx = _ss_cx + _ss_fx * 8;
+                            var _ss_sy = _ss_cy + _ss_fy * 8;
+                            if (WaterCollision(_ss_sx, _ss_sy) != 0) _ss_free = false;
+                            else if (CoopSolidInCell(_ss_sx, _ss_sy) != 0) _ss_free = false;
+                        }
+                    }
+                } else {
+                    if (WaterCollision(_ss_cx, _ss_cy) != 0) _ss_free = false;
+                    else if (CoopSolidInCell(_ss_cx, _ss_cy) != 0) _ss_free = false;
+                }
+                if (!_ss_free) continue;
                 global.coopStandX = _ss_cx;
                 global.coopStandY = _ss_cy;
                 _ss_done = true;
@@ -325,8 +348,7 @@ if (_ss_key != global.coopStandKey) {
         }
     }
     if (!_ss_done) {
-        // Nothing free within four cells: leave the peer where it said it was rather than
-        // inventing a position it never claimed.
+        // Nothing free within reach: leave the position alone rather than inventing one.
         global.coopStandX = _x;
         global.coopStandY = _y;
     }
@@ -1734,7 +1756,7 @@ switch (_cmd) {
         // One caveat, for the record: a structure that is *meant* to stand in water - a
         // bridge - would be moved. The host is the one that should decide that, and it
         // does; this is only the stopgap for a client whose world is not the host's yet.
-        CoopStandSpot(_mx, _my);
+        CoopStandSpot(_mx, _my, 1);
         var _mpx = global.coopStandX;
         var _mpy = global.coopStandY;
         CoopCreateStructure(_msid, _mpx, _mpy, CoopStructDepth(_mpy));

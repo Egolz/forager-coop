@@ -64,8 +64,9 @@ if (_spr <= 0) {
 // Where the peer is drawn. **The host decides.** A peer with no physics - the mock - reports
 // a position that can be inside a tree or in the water, and the owner saw exactly that. The
 // host knows the world, so it pulls the peer onto ground a body could stand on, which is the
-// same pair of checks the placement code already asks. See CoopStandSpot.
-CoopStandSpot(global.coopPeer.x, global.coopPeer.y);
+// same pair of checks the placement code already asks. Mode 0: a peer, so its own position
+// is kept and only the cell it stands in has to be free. See CoopStandSpot.
+CoopStandSpot(global.coopPeer.x, global.coopPeer.y, 0);
 var _x = global.coopStandX;
 var _y = global.coopStandY;
 

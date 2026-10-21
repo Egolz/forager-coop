@@ -129,9 +129,27 @@ if (_spr > 0) {
 // when the sprite is drawn at (x, y) its top edge is at `y - yoffset`. A fixed pixel offset
 // was wrong by most of a sprite, which is why the name first landed *inside* the puppet.
 //
-// The horizontal centring uses `draw_set_halign`, and the previous alignment is put back
-// afterwards: the game's own HUD text is drawn in the same frame, and the reference mod
-// manages its alignment the same way (it sets `fa_left` / `fa_top` before its own draws).
+// The horizontal centring uses `draw_set_halign`, and the alignment is put back
+// afterwards: the game's own text is drawn in the same frame, and the reference mod
+// manages its alignment the same way.
+//
+// **The alignment that is put back is `fa_center`, not `fa_left`.** The owner noticed
+// (live, 2026-10-21) that the character's own speech - the line over its head, "energy
+// running out", "let's build a furnace first!" - sat **a little to the right** of where
+// it belongs whenever the mod was loaded.
+//
+// The game draws that line **centred**, and it does not set the alignment for it: the
+// text takes the alignment left over by the frame's own drawing. So the alignment the
+// mod inherits at the end of the frame is `fa_center`, and putting back `fa_left` turned
+// a centred line into a left-aligned one - and a left-aligned line at the same anchor
+// starts half a text further right, which is exactly what was seen.
+//
+// There is a getter in the build's symbol table (`draw_get_halign`), and saving the
+// value would be the textbook fix - but `data.win` is **not** the loader's function
+// table (it also lists `ini_open`, which the loader refuses with "not function or
+// script"), and a name the loader does not know fails the whole COMPILE. Restoring
+// `fa_center` costs nothing and cannot fail to load. If a frame ever needs a different
+// value, the getter is the way - but it has to be proven on a live COMPILE first.
 var _name = global.coopPeerName;
 if (_name == "") _name = "peer";
 
@@ -140,4 +158,4 @@ if (_name == "") _name = "peer";
 draw_set_halign(fa_center);
 draw_text_ext_transformed_color(_x, _top - 9, _name, 12, 200, 0.45, 0.45, 0,
                                 c_white, c_white, c_white, c_white, 1);
-draw_set_halign(fa_left);
+draw_set_halign(fa_center);

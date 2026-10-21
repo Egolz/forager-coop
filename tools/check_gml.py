@@ -54,6 +54,21 @@ SEEN_IN_PENCILPAL = {
     "Trace",
 }
 
+# **data.win's string table is not the loader's function table - in either direction.**
+#
+# It is missing names the loader knows: `variable_instance_exists` is not in data.win at
+# all, and yet PencilPal calls it and compiles in this very build. It also holds names the
+# loader does not know: `ini_open` is in data.win (the game writes its own
+# `secretSettings.ini` with it) and the loader refuses it.
+#
+# So a name missing from data.win is a **question**, not a verdict - and the reference mod
+# is the oracle that answers it. This list is what the reference mod calls and the symbol
+# table does not have: safe to use, because PencilPal uses it in this build.
+PROVEN_IN_PENCILPAL = {
+    "variable_instance_exists",
+    "variable_instance_set",
+}
+
 KEYWORDS = {"if", "for", "while", "switch", "with", "return", "repeat", "do", "until",
             "catch", "case", "and", "or", "not", "mod", "div", "var", "function", "new",
             "delete", "try", "else"}
@@ -393,7 +408,7 @@ def check_calls(name: str, line: int, body: str, where: str, arities: dict[str, 
                             f"\"`{fn}` is not function or script\"")
             continue
         if symbols is not None:
-            if fn.encode() not in symbols:
+            if fn.encode() not in symbols and fn not in PROVEN_IN_PENCILPAL:
                 missing.add(fn)
                 problems.append(f"{where}:{ln}: {fn}() is not in the build's symbol "
                                 f"table - it will fail at load time")

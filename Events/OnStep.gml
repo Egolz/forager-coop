@@ -158,9 +158,6 @@ if (global.coopTick mod 3 == 0) {
 // room-scoped world work. Until then: bushes sync while in view.
 //
 // What this build does NOT have, and how the shape below works around it:
-//   - no `variable_instance_exists`, so "is this instance a bush" cannot be asked. The bush
-//     objects are looked up **by name** instead, via `asset_get_index`, using PencilPal's own
-//     three names; a name this build lacks returns -1 and simply drops out.
 //   - no `ds_map_find_first`/`ds_map_find_next`, so a ds_map cannot be walked. State is kept
 //     as four **numeric** parallel arrays, filled together in one pass.
 //   - no `string_split` (it is present in data.win but **not in the loader's function table** -
@@ -169,6 +166,14 @@ if (global.coopTick mod 3 == 0) {
 //   - `hp` and `grows` are deliberately never read: nothing can test for their presence, and a
 //     missing field would take the game down. Only `x`, `y` and `object_index` are touched,
 //     which every drawn instance has.
+//
+// **A correction to what used to be written here.** It said this build has no
+// `variable_instance_exists`, and that is **wrong**: the name is not in `data.win`, but the
+// reference mod calls it - `variable_instance_exists(id, "enemyCD")` - and PencilPal compiles
+// in this very build. So the function is there; **data.win's string table is not the loader's
+// function table, in either direction**: it also holds `ini_open`, which the loader refuses
+// with "not function or script". A name missing from data.win is a question, and the
+// reference mod is the oracle that answers it.
 
 // Resolve the bush objects once per session.
 if (global.coopBushObj == -2) {

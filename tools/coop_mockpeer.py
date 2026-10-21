@@ -921,19 +921,22 @@ class Peer:
             self.send(snap_land(self.room, 1, 0, []))
             log("-> SNAP_LAND end of snapshot")
         # M3.2: the world's buildings. The mock has none, so it sends one - a furnace
-        # (row 1 of the real structure database) at the **far corner of the map**, the
-        # same corner the land snapshot put land on.
+        # (row 1 of the real structure database) at the player's own cell, so the owner
+        # can **see** that the host's buildings appear in the client's world.
         #
-        # **Not at the player's feet any more.** The game's own structure creation
-        # clears the ground it stands on, so a furnace appearing where the player stood
-        # destroyed whatever was under it - a rock, which then dropped its ten stones.
-        # The owner saw a block break and an item fall out on every connect and thought
-        # the peer had done it; the peer had, but only by asking for a building in the
-        # middle of the island. The map corner has nothing on it.
+        # **A rock may break under it, and that is the game's own behaviour**: Forager's
+        # structure creation clears the ground it stands on, so building a furnace on a
+        # rock breaks the rock and hands out its ten stones - exactly what happens when
+        # the player builds by hand. The owner saw it and thought the peer had broken
+        # something; the peer had, by asking for a building in the middle of the island.
+        # The drop is no longer announced to the peer (it is the client's rock, not the
+        # host's), so it does not show up twice.
         if self.struct_on_hello and not self.struct_sent and self.player is not None:
             self.struct_sent = True
-            self.send(snap_struct(self.room, 1, 0, [(8, 8, 1)]))
-            log("-> SNAP_STRUCT 1 structure (id 1) at 8,8 (the map corner)")
+            _sx = int(px // 16) * 16
+            _sy = int(py // 16) * 16
+            self.send(snap_struct(self.room, 1, 0, [(_sx, _sy, 1)]))
+            log(f"-> SNAP_STRUCT 1 structure (id 1) at {_sx},{_sy} (the player's own cell)")
             self.send(snap_struct(self.room, 1, 0, []))
             log("-> SNAP_STRUCT end of snapshot")
 

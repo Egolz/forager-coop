@@ -975,9 +975,17 @@ if (_cs_where >= 0) {
 }
 
 global.coopApplyingRemote = true;
+// **The loot flag as well.** The game's own structure creation **clears the ground the
+// structure stands on** - a rock under the spot breaks and drops its ten stones (live,
+// 2026-10-21). That drop is *ours*, not the host's: the host's world has no such rock
+// (the host's furnace replaced it there and the host got the refund then), so announcing
+// it would put a second pile of stone on the host's island for a rock that only ever
+// existed on the client's side.
+global.coopApplyingLoot = true;
 var _cs_new = instance_create_depth(floor(_x), floor(_y), floor(_depth), _cs_obj);
-_cs_new.structure = _sid;
+global.coopApplyingLoot = false;
 global.coopApplyingRemote = false;
+_cs_new.structure = _sid;
 // **Remember it by id.** The structure event for this instance arrives a frame later, so the
 // flag above is already down by then - and the client answered the host's own structure with
 // an intent for it, which the host confirmed, and the game built a row of structures marching

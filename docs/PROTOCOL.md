@@ -70,6 +70,7 @@ with a confirmed mutation. See the model in the hub's `games/forager/DESIGN.md`.
 | 15 | `PICKUP` | either way | `u8 room`, `s32 x`, `s32 y`, `u16 item` |
 | 16 | `RESOURCE_DESTROY` | either way | `u8 room`, `s32 x`, `s32 y`, `u16 objectIndex` |
 | 17 | `SNAP_LAND` | host → client | `u8 room`, `u8 gen`, `u8 flags`, `u16 count`, `{ u16 x, u16 y } × count` |
+| 18 | `SNAP_STRUCT` | host → client | `u8 room`, `u8 gen`, `u8 flags`, `u16 count`, `{ u16 x, u16 y, u16 structureId } × count` |
 
 ### The world snapshot (M3.1)
 
@@ -99,6 +100,31 @@ The client's side of the apply: a cell the host has and the client has not becom
 cell the client has and the host does not is removed (only when the flag says so). The
 snapshot can take the ground out from under the player, so the player is put back on the
 nearest land afterwards.
+
+### The structures (M3.2)
+
+`SNAP_STRUCT` carries the **buildings** — the second half of the snapshot. The land is only
+the ground; the client also needs what stands on it.
+
+| field | meaning |
+|---|---|
+| `structureId` | the row of the structure in the game's **structure database**, not its name. The names in that database are localized display strings (`"печь"`, `"швейная\nмастерская"`), so a name is not a key; the rows are the same build, which is what the structure table checks |
+| `x`, `y` | the position. A structure stands on the **corner** of a cell (`x mod 16 = 0`) |
+| `flags` | bit 0 = "the client should also **remove** the buildings it has and the host does not" — the leftovers of the client's own island, which stand on ground that is now the host's. Same rule as the land's flag: only a host that has a world may set it |
+
+**The world is watched, not queried.** There is no call in this build that answers "every
+structure in the world": the structure database holds the **types** (92 rows), not the
+instances. The only place that sees a structure *and* its database id at the same time is
+`OnStructureSpawn(id, structure)`, so the mod keeps its own list as the world happens and
+the snapshot sends that list. The list is filled **before every guard in that event**,
+including "no peer" and "no player": the buildings that matter are the ones that were
+already standing when the peer joined, and their event fired long before anybody connected.
+
+The client's side of the apply is `CoopCreateStructure`, which **adopts** an instance that is
+already standing there (this side's own optimistic placement of the same building) and
+builds one when there is none — so the snapshot never doubles anything. The removal pass
+compares by **cell**, not by id: a structure stands on a cell corner, so the cell is the
+same on both sides, while the id is only as good as the two installs matching.
 
 Packets 14-16 are M2.2 (resources and loot). The direction is "either way" because
 either machine can be the one that saw the change; the **host** is the one that

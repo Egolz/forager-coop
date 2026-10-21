@@ -9,6 +9,24 @@
 // This fires for the player building something, for mod code and for structures
 // that come back with a loaded save - hence the guards.
 
+// **Remember it for the world snapshot (M3.2).** This event is the only place that sees
+// a structure and its **database id** at the same time: the instance gives the position
+// and `struc` gives the id the far end needs to build the same thing. There is no
+// "give me every structure in the world" call in this build - the structure database
+// holds the *types*, not the instances - so the world is watched instead of queried.
+//
+// **This is done before every other guard, including "no peer" and "no player".** The
+// structures that matter for a snapshot are the ones that were **already there** when
+// the peer joined - the buildings the owner had made before the session started - and
+// their event fired long before anybody connected. A list filled only while a peer is
+// watching would hold exactly the wrong half of the world.
+if (instance_exists(i)) {
+    array_push(global.coopStructIds, struc);
+    array_push(global.coopStructXs, floor(i.x));
+    array_push(global.coopStructYs, floor(i.y));
+    array_push(global.coopStructRooms, i.room);
+}
+
 // **Did the host ask for this one?** The boolean flag alone is not enough, and the live run of
 // 2026-10-21 showed why: the event for a structure **we** created arrives a frame later, so by
 // the time it fires the flag is already down - and the client answered the host's own
@@ -30,6 +48,7 @@ for (var _os_r = array_length(global.coopRemoteInstances) - 1; _os_r >= 0; _os_r
         return;
     }
 }
+
 if (!global.coopPeerAlive) return;        // no one to tell
 if (!instance_exists(objPlayer)) return;  // menus, logo rooms
 

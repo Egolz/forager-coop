@@ -85,6 +85,7 @@ DEBUG_LINE = 12
 ITEM_TABLE = 13
 DROP, PICKUP, RESOURCE_DESTROY = 14, 15, 16
 SNAP_LAND = 17
+SNAP_STRUCT = 18
 
 NAMES = {
     HELLO: "HELLO", WELCOME: "WELCOME", REJECT: "REJECT",
@@ -93,7 +94,7 @@ NAMES = {
     INTENT_REJECTED: "INTENT_REJECTED", STRUCTURE_TABLE: "STRUCTURE_TABLE",
     DEBUG_LINE: "DEBUG_LINE", ITEM_TABLE: "ITEM_TABLE",
     DROP: "DROP", PICKUP: "PICKUP", RESOURCE_DESTROY: "RESOURCE_DESTROY",
-    SNAP_LAND: "SNAP_LAND",
+    SNAP_LAND: "SNAP_LAND", SNAP_STRUCT: "SNAP_STRUCT",
 }
 
 # structures to try to build if we are not told which one (first match wins)
@@ -211,6 +212,22 @@ def pickup(room: int, x: int, y: int, item: int) -> bytes:
 def resource_destroy(room: int, x: int, y: int, obj: int) -> bytes:
     """A resource was harvested and is gone (packet 16)."""
     return bytes([RESOURCE_DESTROY]) + struct.pack("<BiiH", room, x, y, obj)
+
+
+def snap_struct(room: int, gen: int, flags: int,
+                entries: list[tuple[int, int, int]]) -> bytes:
+    """A chunk of the world's structures (packet 18, M3.2).
+
+    Each entry is (x, y, structureId): the position and the **row of the structure in the
+    game's structure database**. The id, not the name - the names in that database are
+    localized display strings, so a name is not a key.
+
+    The chunk with no entries is the end of the snapshot.
+    """
+    out = bytes([SNAP_STRUCT]) + struct.pack("<BBBH", room, gen, flags, len(entries))
+    for x, y, sid in entries:
+        out += struct.pack("<HHH", x, y, sid)
+    return out
 
 
 def bye(reason: str) -> bytes:
@@ -387,6 +404,21 @@ def parse_one(buf: bytes):
             cells.append((x, y))
         return {"cmd": cmd, "name": NAMES[cmd], "room": room, "gen": gen,
                 "flags": flags, "cells": cells}, i
+    if cmd == SNAP_STRUCT:
+        if len(buf) < 5:
+            return None, 0
+        room, gen, flags = struct.unpack("<BBB", buf[1:4])
+        (count,) = struct.unpack("<H", buf[4:6])
+        i = 6
+        entries = []
+        for _ in range(count):
+            if i + 6 > len(buf):
+                return None, 0
+            x, y, sid = struct.unpack("<HHH", buf[i:i + 6])
+            i += 6
+            entries.append((x, y, sid))
+        return {"cmd": cmd, "name": NAMES[cmd], "room": room, "gen": gen,
+                "flags": flags, "entries": entries}, i
     if cmd == DEBUG_LINE:
         s = _read_str(buf, 1)
         if s is None:
@@ -434,6 +466,14 @@ def describe(pkt: dict) -> str:
         return (f"SNAP_LAND room={pkt['room']} gen={pkt['gen']} flags={pkt['flags']} "
                 f"cells={_n}"
                 + (f" first={_first[0]},{_first[1]} last={_last[0]},{_last[1]}" if _n else ""))
+    if name == "SNAP_STRUCT":
+        _n = len(pkt["entries"])
+        _first = pkt["entries"][0] if _n else None
+        _last = pkt["entries"][-1] if _n else None
+        return (f"SNAP_STRUCT room={pkt['room']} gen={pkt['gen']} flags={pkt['flags']} "
+                f"structures={_n}"
+                + (f" first={_first[0]},{_first[1]} id{_first[2]}"
+                   f" last={_last[0]},{_last[1]} id{_last[2]}" if _n else ""))
     if name == "DEBUG_LINE":
         return f"DEBUG {pkt['text']}"
     return f"{name} reason={pkt.get('reason')!r}"
@@ -478,6 +518,9 @@ class Peer:
         self.land_gen = -1
         self.land_sent = False
         self.land_on_hello = False
+        self.struct_count = 0
+        self.struct_sent = False
+        self.struct_on_hello = False
         self.host_spot: tuple[int, int] | None = None   # where the host stands
         # The scripted loot is **destructive in a live world** - a drop at a fixed tile makes
         # the game spawn a pickup inside whatever stands there, and the tree it was in goes.
@@ -676,6 +719,16 @@ class Peer:
             else:
                 log(f"   land chunk: {len(pkt['cells'])} cells, gen {pkt['gen']}, "
                     f"flags {pkt['flags']}")
+        elif name == "SNAP_STRUCT":
+            # The host's buildings (M3.2). Each entry is (x, y, structure id).
+            self.struct_count += len(pkt["entries"])
+            if not pkt["entries"]:
+                log(f"   structure snapshot done: {self.struct_count} structures, "
+                    f"gen {pkt['gen']}, flags {pkt['flags']}")
+            else:
+                _f = pkt["entries"][0]
+                log(f"   structure chunk: {len(pkt['entries'])} structures, gen {pkt['gen']}, "
+                    f"flags {pkt['flags']}, first at {_f[0]},{_f[1]} id {_f[2]}")
         elif name == "WELCOME" and not self.is_host:
             if pkt["protocol"] != PROTOCOL:
                 log("!! host protocol mismatch")
@@ -861,6 +914,19 @@ class Peer:
             log(f"-> SNAP_LAND 1 cell at {_cx},{_cy} (the cell under the player)")
             self.send(snap_land(self.room, 1, 0, []))
             log("-> SNAP_LAND end of snapshot")
+        # M3.2: the world's buildings. The mock has none, so it sends one - a furnace
+        # (row 1 of the real structure database) at the cell under the player, with the
+        # "remove the buildings this side has and the host does not" flag **off**. The
+        # flag would take the client's own buildings away, and a peer without a world
+        # must never be allowed to do that.
+        if self.struct_on_hello and not self.struct_sent and self.player is not None:
+            self.struct_sent = True
+            _sx = int(px // 16) * 16
+            _sy = int(py // 16) * 16
+            self.send(snap_struct(self.room, 1, 0, [(_sx, _sy, 1)]))
+            log(f"-> SNAP_STRUCT 1 structure (id 1) at {_sx},{_sy}")
+            self.send(snap_struct(self.room, 1, 0, []))
+            log("-> SNAP_STRUCT end of snapshot")
 
     def choose_structure(self) -> str | None:
         if self.place_wanted:
@@ -1051,6 +1117,8 @@ def run_selftest() -> int:
     rds = resource_destroy(8, 512, 640, 5)
     lnd = snap_land(8, 3, 1, [(8, 8), (24, 8), (8, 24)])
     lnd_end = snap_land(8, 3, 1, [])
+    strc = snap_struct(8, 4, 1, [(640, 704, 1), (656, 704, 5)])
+    strc_end = snap_struct(8, 4, 1, [])
     extra_cases = [
         (mut, "MUTATION_PLACE", {"seq": 12, "intentId": 9, "x": 640, "y": 704,
                                  "depth": -10, "structure": "forge"}),
@@ -1064,6 +1132,9 @@ def run_selftest() -> int:
         (lnd, "SNAP_LAND", {"room": 8, "gen": 3, "flags": 1,
                             "cells": [(8, 8), (24, 8), (8, 24)]}),
         (lnd_end, "SNAP_LAND", {"room": 8, "gen": 3, "flags": 1, "cells": []}),
+        (strc, "SNAP_STRUCT", {"room": 8, "gen": 4, "flags": 1,
+                                "entries": [(640, 704, 1), (656, 704, 5)]}),
+        (strc_end, "SNAP_STRUCT", {"room": 8, "gen": 4, "flags": 1, "entries": []}),
     ]
     for payload, name, checks in extra_cases:
         try:
@@ -1277,7 +1348,7 @@ def _drain(s: socket.socket, seconds: float) -> bytes:
 
 
 def run_server(port: int, loot: bool = False, echo: bool = False,
-               land: bool = False) -> None:
+               land: bool = False, struct: bool = False) -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # The port may still be held by a game that is hosting and has not let go of it yet, so
@@ -1305,6 +1376,7 @@ def run_server(port: int, loot: bool = False, echo: bool = False,
         peer.loot_on_hello = loot
         peer.echo_structure = echo
         peer.land_on_hello = land
+        peer.struct_on_hello = struct
         try:
             while True:
                 peer.pump()
@@ -1351,6 +1423,11 @@ def main() -> int:
                          "world, so it sends the one cell it knows is land - the cell under "
                          "the player - with the 'remove the land the host does not have' flag "
                          "off, so a fake land set can never take the client's island away")
+    ap.add_argument("--struct", action="store_true",
+                    help="server mode: send the structure snapshot (packet 18). The mock "
+                         "has no buildings, so it sends one - a furnace, row 1 of the real "
+                         "structure database - at the player's feet, with the 'remove the "
+                         "buildings this side has and the host does not' flag off")
     args = ap.parse_args()
     place = "" if args.no_place else args.place
     try:
@@ -1362,7 +1439,8 @@ def main() -> int:
         elif args.mode == "probe":
             run_probe(args.host, args.port, settle=4.0)
         else:
-            run_server(args.port, loot=args.loot, echo=args.echo, land=args.land)
+            run_server(args.port, loot=args.loot, echo=args.echo, land=args.land,
+                       struct=args.struct)
     except KeyboardInterrupt:
         log("bye")
     return 0

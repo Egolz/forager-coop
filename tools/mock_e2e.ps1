@@ -24,7 +24,7 @@ python -u tools/coop_mockpeer.py selftest
 if ($LASTEXITCODE -ne 0) { Write-Host "selftest FAILED"; exit 1 }
 
 $srv = Start-Process -FilePath "python" `
-    -ArgumentList "-u", "tools/coop_mockpeer.py", "server", "--port", "$port", "--loot", "--echo", "--land" `
+    -ArgumentList "-u", "tools/coop_mockpeer.py", "server", "--port", "$port", "--loot", "--echo", "--land", "--struct" `
     -RedirectStandardOutput $srvLog -RedirectStandardError "$log/server.err" `
     -PassThru -NoNewWindow
 Start-Sleep -Seconds 2
@@ -56,7 +56,10 @@ $want = @(
     # is empty - that is the end of the snapshot. Without both, the client's apply path
     # for the land has no offline test at all.
     "<- SNAP_LAND room=",
-    "land snapshot done:"
+    "land snapshot done:",
+    # M3.2: the buildings. Same shape as the land: chunks, and an empty last one.
+    "<- SNAP_STRUCT room=",
+    "structure snapshot done:"
 )
 $failed = @()
 foreach ($w in $want) { if ($text -notmatch [regex]::Escape($w)) { $failed += $w } }
@@ -66,6 +69,6 @@ if ($failed.Count -gt 0) {
     Write-Host "--- client log ---"; Get-Content $cliLog -Tail 20
     exit 1
 }
-Write-Host "e2e ok: handshake, welcome, pong, structure table, item table, the three loot packets, INTENT_PLACE and the land snapshot all seen"
+Write-Host "e2e ok: handshake, welcome, pong, structure table, item table, the three loot packets, INTENT_PLACE and both world snapshots all seen"
 Write-Host "(logs in $log)"
 exit 0

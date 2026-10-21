@@ -40,15 +40,16 @@ enum CoopCmd {
     PICKUP           = 15,  // either way: an item left the world (picked up)
     RESOURCE_DESTROY = 16,  // either way: a resource (tree/rock/...) was harvested
     // --- M3.1: the world snapshot ---
-    SNAP_LAND        = 17   // host -> client: a chunk of the world's land cells
+    SNAP_LAND        = 17,  // host -> client: a chunk of the world's land cells
+    SNAP_STRUCT      = 18   // host -> client: a chunk of the world's structures
 }
 
-global.coopVersion  = "0.0.53-m3s";
+global.coopVersion  = "0.0.54-m3t";
 global.coopProtocol = 6;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
                            // 5 adds the player name to HELLO/WELCOME (M3.1);
-                           // 6 adds SNAP_LAND, the world snapshot (M3.1)
+                           // 6 adds the world snapshot (SNAP_LAND, SNAP_STRUCT)
                            //
                            // The number moves when the **wire format** moves, not when a
                            // feature is added. 5 was free again after a rejected CMD
@@ -145,6 +146,28 @@ global.coopLandGen   = -1;
 global.coopHostLand  = [];
 global.coopLandAdded = 0;
 global.coopLandRemoved = 0;
+// How many times the game's own land function was called and the cell was **still**
+// water afterwards. A silent failure looks exactly like "the mod does nothing", so it
+// is counted and reported over the wire instead.
+global.coopLandFailed = 0;
+// M3.2: the structures the world has, as three parallel lists (id, x, y) - the same
+// shape the mod uses for the bush sync. The list is filled by OnStructureSpawn, which
+// is the only place that sees a structure **and its database id** at the same time: the
+// event carries the instance (so the position is known) and the structure id (so the
+// far end can build the same thing). There is no way to ask the game for "every
+// structure in the world" after the fact - the database holds the *types*, not the
+// instances - so the world is watched instead of queried.
+global.coopStructIds = [];
+global.coopStructXs  = [];
+global.coopStructYs  = [];
+global.coopStructRooms = [];
+// The cells the host's structures stand in, as a bitmap over the same 84 x 84 grid the
+// land uses. The client keeps it to know which of **its** structures are the host's
+// (and which are leftovers of its own island).
+global.coopHostStructCells = [];
+global.coopStructGen   = -1;
+global.coopStructAdded = 0;
+global.coopStructRemoved = 0;
 
 
 // Bush / pickable-plant sync state (see Events/OnStep.gml, "bush sync"). A bush is not a

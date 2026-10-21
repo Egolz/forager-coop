@@ -1101,6 +1101,66 @@ for (var _st_j = 0; _st_j < _st_c; _st_j++) {
 }
 CoopSend(_st_b);
 
+#define CoopSendStructSnapshot()
+// The world's structures, so the client's world has the host's buildings in it.
+//
+// **The world is watched, not queried.** There is no call in this build that answers
+// "every structure in the world": the structure database holds the **types** (92 rows),
+// not the instances. The only place that sees a structure together with its database id
+// is `OnStructureSpawn`, so the mod keeps its own list as the world happens (see
+// Events/OnStructureSpawn.gml) and the snapshot sends that list.
+//
+// The wire carries the **id**, not the name: the names in this game's database are
+// localized display strings ("печь", "швейная\nмастерская"), so a name is not a key -
+// but the rows are the same build, which is what the structure table checks.
+//
+// The chunks are small (32 entries) because each entry carries an id and two
+// coordinates, and a world with a few hundred buildings is still a few packets.
+if (instance_exists(objPlayer)) {
+var _ss_room = objPlayer.room;
+var _ss_ids = [];
+var _ss_xs  = [];
+var _ss_ys  = [];
+for (var _ss_i = 0; _ss_i < array_length(global.coopStructIds); _ss_i += 1) {
+    if (global.coopStructRooms[_ss_i] != _ss_room) continue;
+    array_push(_ss_ids, global.coopStructIds[_ss_i]);
+    array_push(_ss_xs, global.coopStructXs[_ss_i]);
+    array_push(_ss_ys, global.coopStructYs[_ss_i]);
+}
+global.coopStructGen = (global.coopStructGen + 1) % 250;
+var _ss_gen = global.coopStructGen;
+var _ss_total = array_length(_ss_ids);
+var _ss_sent  = 0;
+while (_ss_sent < _ss_total) {
+    var _ss_n = _ss_total - _ss_sent;
+    if (_ss_n > 32) _ss_n = 32;
+    var _ss_b = buffer_create(64, buffer_grow, 1);
+    buffer_write(_ss_b, buffer_u8, CoopCmd.SNAP_STRUCT);
+    buffer_write(_ss_b, buffer_u8, _ss_room);
+    buffer_write(_ss_b, buffer_u8, _ss_gen);
+    buffer_write(_ss_b, buffer_u8, 1);      // flags: bit 0 = drop the structures this side has and the host does not
+    buffer_write(_ss_b, buffer_u16, _ss_n);
+    for (var _ss_j = 0; _ss_j < _ss_n; _ss_j += 1) {
+        buffer_write(_ss_b, buffer_u16, _ss_xs[_ss_sent + _ss_j]);
+        buffer_write(_ss_b, buffer_u16, _ss_ys[_ss_sent + _ss_j]);
+        buffer_write(_ss_b, buffer_u16, _ss_ids[_ss_sent + _ss_j]);
+    }
+    CoopSend(_ss_b);
+    _ss_sent += _ss_n;
+}
+var _ss_end = buffer_create(16, buffer_grow, 1);
+buffer_write(_ss_end, buffer_u8, CoopCmd.SNAP_STRUCT);
+buffer_write(_ss_end, buffer_u8, _ss_room);
+buffer_write(_ss_end, buffer_u8, _ss_gen);
+buffer_write(_ss_end, buffer_u8, 1);
+buffer_write(_ss_end, buffer_u16, 0);
+CoopSend(_ss_end);
+Trace("Co-op: structure snapshot sent - " + string(_ss_total) + " structures in room "
+      + string(_ss_room) + ".");
+CoopSendDebugLine("Co-op: structure snapshot sent - " + string(_ss_total)
+                  + " structures in room " + string(_ss_room) + ".");
+}
+
 #define CoopSendLandSnapshot()
 // The world's land, cell by cell, so the client's world becomes the host's world.
 //
@@ -1174,6 +1234,8 @@ buffer_write(_ls_end, buffer_u16, 0);
 CoopSend(_ls_end);
 Trace("Co-op: world snapshot sent - " + string(_ls_total) + " land cells in room "
       + string(_ls_room) + " (generation " + string(_ls_gen) + ").");
+CoopSendDebugLine("Co-op: world snapshot sent - " + string(_ls_total) + " land cells in room "
+                  + string(_ls_room) + " (generation " + string(_ls_gen) + ").");
 }
 
 #define CoopApplyLandSnapshotEnd(_room, _replace)
@@ -1209,12 +1271,15 @@ if (_replace != 0 && instance_exists(objPlayer) && objPlayer.room == _room) {
 global.coopLandRemoved = _dl_removed;
 Trace("Co-op: land snapshot applied - " + string(global.coopLandAdded) + " cells placed, "
       + string(_dl_removed) + " removed.");
+CoopSendDebugLine("Co-op: land snapshot applied - " + string(global.coopLandAdded)
+                  + " cells placed, " + string(_dl_removed) + " removed"
+                  + (global.coopLandFailed > 0 ? (", " + string(global.coopLandFailed)
+                                                + " PLACE LANDFILLS THAT DID NOT TAKE") : "") + ".");
 // The snapshot can take the ground out from under the player: this side's island was
 // removed and the host's put in its place, and the player was standing on the old one.
 CoopKeepPlayerOnLand();
 
 #define CoopKeepPlayerOnLand()
-// Put the player back on land if the snapshot left them in the water.
 //
 // The world's rule is that nothing stands in water, so a player left standing where the
 // ground was taken away is a player in the water. The nearest land is the right place to
@@ -1243,6 +1308,46 @@ if (instance_exists(objPlayer)) {
         }
     }
 }
+
+#define CoopApplyStructSnapshotEnd(_room, _replace)
+// The host's buildings are all here. Now make this side match: a building this side has
+// and the host does not is a leftover of this side's own island - and the ground under
+// it is the host's now, so it has to go.
+//
+// **Behind a flag, like the land's removal.** A peer without a world would take the
+// player's buildings away for good, and nothing could put them back.
+//
+// The comparison is by **cell**, not by id: a structure stands on the corner of a cell,
+// so the cell it is in is the same on both sides, while the id is a database row and the
+// row is only as good as the two installs matching (which the structure table checks).
+var _sr_removed = 0;
+if (_replace != 0 && instance_exists(objPlayer) && objPlayer.room == _room) {
+    var _sr_par = asset_get_index("parStructure");
+    var _sr_n = instance_number(_sr_par);
+    for (var _sr_i = _sr_n - 1; _sr_i >= 0; _sr_i -= 1) {
+        var _sr_inst = instance_find(_sr_par, _sr_i);
+        if (!instance_exists(_sr_inst)) continue;
+        if (_sr_inst.room != _room) continue;
+        var _sr_cell = floor(_sr_inst.x / 16) + floor(_sr_inst.y / 16) * 84;
+        if (_sr_cell < 0 || _sr_cell >= 7056) continue;
+        if (global.coopHostStructCells[_sr_cell] == 0) {
+            // Both flags, because the game's own demolition hands the materials back as
+            // a drop, and that drop is **ours** - the host never saw the building, so it
+            // must not hear about a refund for it.
+            global.coopApplyingRemote = true;
+            global.coopApplyingLoot  = true;
+            instance_destroy(_sr_inst);
+            global.coopApplyingLoot  = false;
+            global.coopApplyingRemote = false;
+            _sr_removed += 1;
+        }
+    }
+}
+global.coopStructRemoved = _sr_removed;
+Trace("Co-op: structure snapshot applied - " + string(global.coopStructAdded)
+      + " structures placed, " + string(_sr_removed) + " removed.");
+CoopSendDebugLine("Co-op: structure snapshot applied - " + string(global.coopStructAdded)
+                  + " structures placed, " + string(_sr_removed) + " removed.");
 
 #define CoopDumpStructures()
 // F9. Is the object our table calls a structure really one? `isStruct` asks the
@@ -1678,6 +1783,9 @@ switch (_cmd) {
         // or every spot the host builds on may be water on the client's side and the
         // two sides can never agree on where a building stands.
         CoopSendLandSnapshot();
+        // M3.2: and the buildings on it. The land alone is only the ground; the client
+        // also needs what stands on it.
+        CoopSendStructSnapshot();
         break;
 
     case CoopCmd.WELCOME:
@@ -2045,6 +2153,18 @@ switch (_cmd) {
                 if (WaterCollision(_sl_x, _sl_y) != 0) {
                     with (objPlayer) { PlaceLandfill(_sl_x, _sl_y); }
                     _sl_added += 1;
+                    // **Did it take?** The game's function is not documented, and a
+                    // function that quietly does nothing looks exactly like a mod that
+                    // does nothing at all. So the cell is asked about again right after
+                    // the call: if it is still water, the call did not land the cell and
+                    // that is worth a line in the log rather than a mystery.
+                    if (WaterCollision(_sl_x, _sl_y) != 0) {
+                        global.coopLandFailed += 1;
+                        if (global.coopLandFailed <= 3) {
+                            Trace("Co-op: PlaceLandfill did NOT turn " + string(_sl_x) + ","
+                                  + string(_sl_y) + " into land.");
+                        }
+                    }
                 }
             }
         }
@@ -2052,6 +2172,49 @@ switch (_cmd) {
         if (_sl_n == 0) {
             // The end of the snapshot.
             CoopApplyLandSnapshotEnd(_sl_room, _sl_flags);
+        }
+        break;
+
+    case CoopCmd.SNAP_STRUCT:
+        // The host's buildings (M3.2).
+        //
+        // The entry carries the structure's **id** (its row in the game's structure
+        // database), not its name: the names are localized display strings, so a name is
+        // not a key. The row is the same on both installs - that is what the structure
+        // table checks - and the row's object is what the far end builds.
+        var _sc_room  = buffer_read(_buf, buffer_u8);
+        var _sc_gen   = buffer_read(_buf, buffer_u8);
+        var _sc_flags = buffer_read(_buf, buffer_u8);
+        var _sc_n     = buffer_read(_buf, buffer_u16);
+        // The structure database has to be here before an id can be turned into an
+        // object - it is built lazily, and on a client that has never placed anything
+        // it may not be built at all.
+        if (array_length(global.coopStructNames) == 0) CoopBuildStructDb();
+        if (_sc_gen != global.coopStructGen) {
+            global.coopStructGen = _sc_gen;
+            global.coopHostStructCells = array_create(7056, 0);
+            global.coopStructAdded = 0;
+        }
+        var _sc_added = 0;
+        for (var _sc_i = 0; _sc_i < _sc_n; _sc_i += 1) {
+            var _sc_x  = buffer_read(_buf, buffer_u16);
+            var _sc_y  = buffer_read(_buf, buffer_u16);
+            var _sc_id = buffer_read(_buf, buffer_u16);
+            var _sc_cell = floor(_sc_x / 16) + floor(_sc_y / 16) * 84;
+            if (_sc_cell >= 0 && _sc_cell < 7056) global.coopHostStructCells[_sc_cell] = 1;
+            if (instance_exists(objPlayer) && objPlayer.room == _sc_room) {
+                // **Adopt or build.** `CoopCreateStructure` adopts an instance that is
+                // already standing there - this side's own optimistic placement of the
+                // same building - and builds one when there is none, so the snapshot
+                // never doubles anything.
+                if (CoopCreateStructure(_sc_id, _sc_x, _sc_y, CoopStructDepth(_sc_y)) >= 0) {
+                    _sc_added += 1;
+                }
+            }
+        }
+        global.coopStructAdded += _sc_added;
+        if (_sc_n == 0) {
+            CoopApplyStructSnapshotEnd(_sc_room, _sc_flags);
         }
         break;
 

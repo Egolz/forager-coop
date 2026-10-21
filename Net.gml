@@ -1721,9 +1721,30 @@ switch (_cmd) {
         // OnStructureSpawn() fires before the game sets a depth (the mutation
         // went out with 0 for an instance that really sat at -656), and depth is
         // a pure function of y anyway, so both ends derive the same value.
-        CoopCreateStructure(_msid, _mx, _my, CoopStructDepth(_my));
+        // **Put it on ground a body could stand on.** The host validated this placement
+        // against *its* world, and the client's world is not the same world yet - there is
+        // no snapshot - so a spot that is dry for the host can be water for the client. The
+        // live run of 2026-10-21 put a furnace half into a lake because of it.
+        //
+        // The snap is to the **nearest free cell**, so the structure lands as close to where
+        // the host said as the ground allows, and it **cancels itself** once the worlds are
+        // shared: with the same world on both sides, the host's spot is free on the client's
+        // side too, and nothing moves.
+        //
+        // One caveat, for the record: a structure that is *meant* to stand in water - a
+        // bridge - would be moved. The host is the one that should decide that, and it
+        // does; this is only the stopgap for a client whose world is not the host's yet.
+        CoopStandSpot(_mx, _my);
+        var _mpx = global.coopStandX;
+        var _mpy = global.coopStandY;
+        CoopCreateStructure(_msid, _mpx, _mpy, CoopStructDepth(_mpy));
+        if (_mpx != _mx || _mpy != _my) {
+            Trace("Co-op: mutation seq " + string(_seq) + " wanted '" + _mname + "' at "
+                  + string(_mx) + "," + string(_my) + " - that ground is not free here, "
+                  + "so it went to " + string(_mpx) + "," + string(_mpy) + ".");
+        }
         Trace("Co-op: <- mutation seq " + string(_seq) + " '" + _mname + "' at "
-              + string(_mx) + "," + string(_my) + ".");
+              + string(_mpx) + "," + string(_mpy) + ".");
         // **The self-test.** The host said a structure now exists at (x,y); this side has to
         // have it. Checking the **world**, not the packet, is what makes the client's apply
         // path testable at all: the mock peer can assert the bytes that arrived, but only

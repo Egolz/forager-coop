@@ -429,11 +429,11 @@ class Peer:
         self.last_place_name = ""   # the name the client last built with
         self._last_host_pos = 0.0
         self.host_spot: tuple[int, int] | None = None   # where the host stands
-        # The scripted resource destroy is **destructive**: it takes a tree out of the
-        # client's world. It is off by default, so the harness does not quietly wreck the
-        # owner's island; the offline end-to-end test turns it on, where there is no world to
-        # damage.
-        self.destroy_on_hello = False
+        # The scripted loot is **destructive in a live world** - a drop at a fixed tile makes
+        # the game spawn a pickup inside whatever stands there, and the tree it was in goes.
+        # It is off by default, so the harness does not quietly wreck the owner's island;
+        # the offline end-to-end test turns it on, where there is no world to damage.
+        self.loot_on_hello = False
         # Where the puppet **stands**. Picked once, when the mock first learns where the host
         # is, and then left alone - see tick().
         self.anchor: tuple[int, int] | None = None
@@ -595,11 +595,17 @@ class Peer:
             log("-> DEBUG_LINE")
             # M2.2: the three loot packets, so packets 14-16 are exercised
             # offline before a game speaks them (see PROTOCOL.md).
-            self.send(drop(8, 640, 704, 0, 3))
-            log("-> DROP item #0 x3 at 640,704")
-            self.send(pickup(8, 640, 704, 0))
-            log("-> PICKUP item #0 at 640,704")
-            if self.destroy_on_hello:
+            # The scripted loot is **not harmless in a live world**: a DROP makes the game
+            # spawn a pickup at a hard-coded tile, and if a tree stands there, the pickup
+            # appears inside it and the tree goes. The owner saw a tree break on every
+            # connect and it was this, not the mod. So the whole script is off by default and
+            # only the offline end-to-end test turns it on, where there is no world to
+            # damage.
+            if self.loot_on_hello:
+                self.send(drop(8, 640, 704, 0, 3))
+                log("-> DROP item #0 x3 at 640,704")
+                self.send(pickup(8, 640, 704, 0))
+                log("-> PICKUP item #0 at 640,704")
                 self.send(resource_destroy(8, 512, 640, 5))
                 log("-> RESOURCE_DESTROY obj#5 at 512,640")
             self.handshaken = True
@@ -1181,7 +1187,7 @@ def _drain(s: socket.socket, seconds: float) -> bytes:
     return data
 
 
-def run_server(port: int, destroy: bool = False) -> None:
+def run_server(port: int, loot: bool = False) -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # The port may still be held by a game that is hosting and has not let go of it yet, so
@@ -1206,7 +1212,7 @@ def run_server(port: int, destroy: bool = False) -> None:
         log(f"game connected from {addr[0]}:{addr[1]}")
         reset_debug_file()
         peer = Peer(conn, is_host=True)
-        peer.destroy_on_hello = destroy
+        peer.loot_on_hello = loot
         try:
             while True:
                 peer.pump()
@@ -1238,11 +1244,12 @@ def main() -> int:
                     help="client mode: keep retrying the connection for this many seconds")
     ap.add_argument("--for", dest="run_for", type=float, default=0.0,
                     help="client mode: exit after this many seconds (0 = run until stopped)")
-    ap.add_argument("--destroy", action="store_true",
-                    help="server mode: also script a RESOURCE_DESTROY on connect. It takes a "
-                         "tree out of the client's world, so it is off by default; the "
-                         "offline end-to-end test turns it on, where there is no world to "
-                         "damage")
+    ap.add_argument("--loot", action="store_true",
+                    help="server mode: also script the loot packets (drop, pickup, "
+                         "resource destroy) on connect. A drop at a fixed tile makes the "
+                         "game spawn a pickup inside whatever stands there - a tree goes - "
+                         "so it is off by default; the offline end-to-end test turns it on, "
+                         "where there is no world to damage")
     args = ap.parse_args()
     place = "" if args.no_place else args.place
     try:
@@ -1254,7 +1261,7 @@ def main() -> int:
         elif args.mode == "probe":
             run_probe(args.host, args.port, settle=4.0)
         else:
-            run_server(args.port, destroy=args.destroy)
+            run_server(args.port, loot=args.loot)
     except KeyboardInterrupt:
         log("bye")
     return 0

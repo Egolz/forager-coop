@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.80-m5k5";
+global.coopVersion  = "0.0.81-m5k6";
 global.coopProtocol = 11;  // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -245,15 +245,28 @@ global.coopIdxUnitsStand  = 0;
 global.coopIdxStepsStand  = 0;
 global.coopIdxUnitsWalk   = 0;
 global.coopIdxStepsWalk   = 0;
-// M5k5: **how often the draw handler actually runs, and how much time it thinks passed.**
-// The owner's report - the puppet bobbing ~1 time in 5 s against a requested 2/s, a factor of 10 -
-// cannot be a tuning error, so it is a missing or extra factor. These count the handler's calls and
-// the sum of its `_dt` between probe dumps, which separates the two candidates: a handler that runs
-// rarely (few calls, honest `_dt`) from one that is being told too little time passed each call
-// (many calls, a `_dt` sum far below the wall clock, i.e. clamped by the 100 ms ceiling).
-global.coopDrawCount = 0;
-global.coopDrawMsSum = 0;
-global.coopLastDt    = 16;
+// M5k5/M5k6: **the draw handler's own rate and its own idea of elapsed time**, and **the bob period
+// itself**, promoted to globals so the F3 measurement reads exactly what the draw code uses.
+// `coopDrawCount`/`coopDrawMsSum` are the handler's calls and the sum of its `_dt` between probe
+// dumps; `coopLastDt` is the previous draw's `_dt`; `coopIdlePeriodS` is the one tunable number for
+// the bob (a whole cycle, in seconds - the unit the owner can see).
+global.coopDrawCount  = 0;
+global.coopDrawMsSum  = 0;
+global.coopLastDt     = 16;
+global.coopIdlePeriodS = 0.5;   // one whole bob, measured by the owner at ~2/s
+// M5k6: the F3 bob measurement - a per-step sampler so the player's own bob and the puppet's can be
+// read side by side in one key press, instead of being inferred from a count by eye.
+global.coopBobArmed   = false;
+global.coopBobAsk     = false;  // set by the key, consumed by the sampler - the window's start
+global.coopBobSteps   = 0;
+global.coopBobWindow  = 240;    // steps sampled per press (~4 s at the live ~60 draws/s)
+global.coopBobStart   = 0;
+global.coopBobPrevP   = 0;
+global.coopBobPrevQ   = 0;
+global.coopBobCyclesP = 0;
+global.coopBobCyclesQ = 0;
+global.coopBobUnitsP  = 0;
+global.coopBobUnitsQ  = 0;
 // Where the peer is actually drawn. The host decides, because the host is the side that
 // knows the world - a peer with no physics (the mock) reports a position inside a tree or in
 // the water, and the host pulls it onto ground a body could stand on.

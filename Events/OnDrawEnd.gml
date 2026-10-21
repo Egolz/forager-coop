@@ -292,7 +292,7 @@ if (_face == 0) _face = 1;
 // whose bob genuinely differs drives the puppet to match. Otherwise the **period** is the source of
 // truth and the frame count converts it - `_idle_n / period / 1000` units per millisecond - so 0.5 s
 // stays the one number that can be tuned, instead of a magic rate that has to be re-derived.
-var _COOP_IDLE_PERIOD_S = 0.5;                  // one whole bob, measured by the owner at ~2/s
+var _COOP_IDLE_PERIOD_S = global.coopIdlePeriodS;   // one whole bob, in seconds (M5k6: a global now)
 var _IDLE_UNITS = global.coopPeerStepRate;      // units per millisecond, measured from the peer
 if (_IDLE_UNITS <= 0.0005) _IDLE_UNITS = -1;    // -1 = "use the period" (computed with the frame count)
 if (_walking) {

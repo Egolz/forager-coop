@@ -917,8 +917,98 @@ for (var _ar_i = 0; _ar_i < _ar_n; _ar_i++) {
 if (_ar_hits > 0) global.coopLootBreaks += 1;
 return _ar_hits;
 
+#define CoopMeasureBob()
+// **F3 - measure the head-bob rate, live, from inside the game.** (M5k6, asked for by the owner.)
+//
+// Five rounds were spent choosing a rate for the puppet's bob, and every one of them was checked
+// against a *number the owner counted by eye* - which is the right instrument, but it is a coarse one
+// and it cannot say *why* the puppet differs. This closes that: one key press samples **both models
+// at once**, per game step, for a few seconds, and reports the cycles each one actually completed.
+//
+// This file is **called every step** (from OnStep, which pumps it even when the key is not held); the
+// key only *arms* the window. The arming happens in a one-line wrapper so the sampler itself stays a
+// single function that can be read top to bottom.
+if (global.coopBobArmed) {
+    if (!instance_exists(objPlayer)) {
+        Trace("Co-op: F3 needs a loaded world.");
+        global.coopBobArmed = false;
+        exit;
+    }
+    // The window: long enough for several bobs at any plausible rate, short enough to read.
+    if (global.coopBobSteps == 0) {
+        global.coopBobPrevP = abs(objPlayer.image_index);
+        global.coopBobPrevQ = global.coopIdleFrameF;
+        global.coopBobStart  = current_time;
+    }
+    global.coopBobSteps += 1;
+
+    var _bp_now = abs(objPlayer.image_index);
+    var _bq_now = global.coopIdleFrameF;
+    var _bp_n = sprite_get_number(objPlayer.sprite_index);
+    var _bq_n = sprite_get_number(0);            // the idle body, `sprPlayerIdle`, is id 0
+    if (_bp_n < 1) _bp_n = 1;
+    if (_bq_n < 1) _bq_n = 1;
+    // A cycle completes when the counter **falls** - it is a frame counter that wraps at the frame
+    // count, so a rise is a frame and a fall is the end of a cycle.
+    if (_bp_now < global.coopBobPrevP) global.coopBobCyclesP += 1;
+    if (_bq_now < global.coopBobPrevQ) global.coopBobCyclesQ += 1;
+    // The total distance travelled, which is what catches a counter that moves *within* a cycle but
+    // never reaches the end of one - a rate too low to wrap inside the window.
+    global.coopBobUnitsP += _bp_now - global.coopBobPrevP;
+    global.coopBobUnitsQ += _bq_now - global.coopBobPrevQ;
+    global.coopBobPrevP = _bp_now;
+    global.coopBobPrevQ = _bq_now;
+
+    if (global.coopBobSteps >= global.coopBobWindow) {
+        global.coopBobArmed  = false;
+        global.coopBobSteps  = 0;
+        var _bs_ms   = max(1, current_time - global.coopBobStart);
+        var _bs_s    = _bs_ms / 1000;
+        var _bs_fps  = global.coopBobWindow / _bs_s;            // steps actually observed per second
+        var _bs_p    = global.coopBobCyclesP / _bs_s;           // the player's own bobs per second
+        var _bs_q    = global.coopBobCyclesQ / _bs_s;           // the puppet's bobs per second
+        var _bs_up   = global.coopBobUnitsP / _bs_s;            // player index-units per second
+        var _bs_uq   = global.coopBobUnitsQ / _bs_s;            // puppet index-units per second
+        var _bs_line = "bob measure over " + string(floor(_bs_ms)) + " ms ("
+                     + string(global.coopBobWindow) + " steps, " + string(floor(_bs_fps * 10) / 10)
+                     + " steps/s, " + string(_bp_n) + "-frame body):"
+                     + " PLAYER " + string(floor(_bs_p * 100) / 100) + " bob/s ("
+                     + string(floor(_bs_up * 100) / 100) + " u/s)"
+                     + " | PUPPET " + string(floor(_bs_q * 100) / 100) + " bob/s ("
+                     + string(floor(_bs_uq * 100) / 100) + " u/s)"
+                     + " | rate asked: period " + string(global.coopIdlePeriodS) + " s = "
+                     + string(floor(_bp_n / (global.coopIdlePeriodS * 1000) * 10000) / 10000) + " u/ms"
+                     + " | peerRate " + string(floor(global.coopPeerStepRate * 10000) / 10000)
+                     + " u/ms";
+        Trace(_bs_line);
+        CoopSendDebugLine(_bs_line);
+        // The puppet's internals, so a non-moving bob can be told apart from an unpainted one.
+        var _bs_why = "bob internals: idleFrameF " + string(floor(global.coopIdleFrameF * 100) / 100)
+                    + " / " + string(_bq_n) + " frames, idleSprite " + string(global.coopIdleSprite)
+                    + ", walking " + string(global.coopPeerWalking ? 1 : 0)
+                    + ", alive " + string(global.coopPeerAlive ? 1 : 0)
+                    + ", draw dt(last) " + string(global.coopLastDt) + " ms";
+        Trace(_bs_why);
+        CoopSendDebugLine(_bs_why);
+    }
+}
+
+// **Arming the window.** `vk_f3` is `keyboard_check_pressed`, so this runs on the press only; the
+// sampler above runs on **every** step. A second press during a window restarts it, which is what a
+// person expects from a measurement key.
+if (global.coopBobArmed == false && global.coopBobSteps == 0 && global.coopBobAsk) {
+    global.coopBobAsk    = false;
+    global.coopBobArmed  = true;
+    global.coopBobSteps  = 0;
+    global.coopBobCyclesP = 0;
+    global.coopBobCyclesQ = 0;
+    global.coopBobUnitsP  = 0;
+    global.coopBobUnitsQ  = 0;
+}
+
 #define CoopProbeItems()
-// F3. Read-only. Measures the item half of M2.2 before a single byte of loot sync
+// F4 (moved off F3, which is now the bob measurement). Read-only. Measures the item half of M2.2
+// before a single byte of loot sync
 // is written: how many items does this build have, do the ids we care about
 // (Wood, Stone, Coin) resolve to the same numbers the docs and PencilPal assume,
 // and does the item database agree between `ItemGet(id, ItemData.Name)` and the
@@ -926,7 +1016,7 @@ return _ar_hits;
 //
 // It creates nothing, drops nothing and gains nothing: ItemCount is a read.
 if (!instance_exists(objPlayer)) {
-    Trace("Co-op: F3 needs a loaded world.");
+    Trace("Co-op: F4 needs a loaded world.");
     exit;
 }
 

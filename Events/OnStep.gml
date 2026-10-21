@@ -13,9 +13,14 @@ if (keyboard_check_pressed(vk_f11)) CoopProbeApi();
 if (keyboard_check_pressed(vk_f12)) CoopProbeSpot();
 // **F4 did not reach the mod** in the live run of 2026-10-21 - no report, no freeze, the
 // game alive - so the land probe is on **F2** as well, and F2 is the one to press.
-if (keyboard_check_pressed(vk_f4)) CoopProbeLand();
+// **F3 is the bob measurement** the owner asked for (M5k6): it **arms** a window here, and the
+// sampler is pumped on every step below, because a rate has to be measured across steps and not at
+// the instant of a key press.
+if (keyboard_check_pressed(vk_f3)) global.coopBobAsk = true;
+CoopMeasureBob();
+// the items probe kept its job, one key over (F3 became the bob measurement the owner asked for)
+if (keyboard_check_pressed(vk_f4)) CoopProbeItems();
 if (keyboard_check_pressed(vk_f2)) CoopProbeLand();
-if (keyboard_check_pressed(vk_f3)) CoopProbeItems();
 // **The enemy-API probe runs by itself, once per loaded world** (2026-10-22). It needs no key
 // press because it must be readable: its lines go to the mock through `CoopSendDebugLine`, and
 // a human pressing a key is not a test plan. F1 re-runs it on demand.

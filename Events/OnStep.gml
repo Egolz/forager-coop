@@ -270,103 +270,85 @@ if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
 }
 
 // ============================================================================
-// The enemies (M3.5).
+// The enemies (M3.5), third attempt - and this one asks the world instead of guessing a field.
 //
-// **The census is the sync, and it no longer depends on knowing what a slime is called.**
-// The first version watched `parEnemy` and `objSlime` by name and reported **nothing at
-// all** while the owner stood next to a slime (live, 2026-10-22). Two causes, both now
-// handled:
+// **The first two attempts guessed.** The first watched `parEnemy`/`objSlime` by name (and a
+// `>= 0` guard accepted the 0 this build returns for an unknown name, so it walked object 0).
+// The second watched every object carrying `hp` - and the live census came back
+// "watching 3 of the 4 object(s) carrying hp: { 86, 84, 85 }", which is **two bushes and a
+// rock**, with no slime anywhere in it. `hp` is what a **harvestable** has, not what an enemy
+// has; the slime does not carry the field at all.
 //
-//  * `asset_get_index` in this build answers a name it does not know with **0**, not -1.
-//    A guard of `>= 0` therefore *accepts the miss* and puts object 0 in the walk list -
-//    a census that walks the wrong object and reports nothing while looking healthy.
-//    The guard is `> 0` now, and the answers are printed once so the next session knows
-//    which names resolve.
-//  * More importantly, the sync must not depend on names at all. What makes a watched
-//    object an **enemy** is decided by what it carries: a creature has `hp` and `hpMax`,
-//    and a bush, a rock or a building does not. So the watch list is built from the live
-//    world - every object that has at least one instance right now - and each candidate
-//    is checked for `hp` with `variable_instance_exists`, the field test the reference mod
-//    proves the loader knows.
+// So the census stops guessing and observes the one thing that is true of every killable
+// thing whatever its fields are: **the game removes it from the world**. This step walks the
+// whole live world, compares it with the previous step's list, and reports **what left** - a
+// killed slime, a picked bush, a broken rock, all through the same honest door. What it is, is
+// answered by the object itself: `object_get_name` and its own `hp` if it has one.
 //
-// That is one walk over the objects, kept in `global.coopMobObj`, and it is the same shape
-// the bush census uses: parallel arrays, `instance_find`, nothing that needs a `ds_map`.
-if (!global.coopMobResolved && instance_exists(objPlayer)) {
-    global.coopMobResolved = true;
-    // **The walk is over `all` - every instance GameMaker has - and the objects are collected
-    // into a plain array.** This started as a second global array, and that is the bug the
-    // owner hit: it was never initialised, so the *first* check (`global.coopMobObj == -2`,
-    // when the array did not exist, so it read as 0) never matched and the census stayed
-    // empty forever - "watching 0 object(s) out of 18 in the world: -2", with `-2` printed
-    // for an array that was never a list. A local array has no such state to get wrong.
-    var _all_objs = [];
-    var _n_all = 0;
+// That is also the shape the rest of the mod already uses for plants (see the bush census
+// above), so there is one way of noticing something disappear, not three.
+if (global.coopMobCensus < 2 && instance_exists(objPlayer)) {
+    global.coopMobCensus += 1;
+    var _wlk_ids = [];
+    var _wlk_obj = [];
+    var _wlk_x   = [];
+    var _wlk_y   = [];
     var _cnt_all = instance_number(all);
-    if (_cnt_all > 4000) _cnt_all = 4000;      // the walk is a census, not a sweep of the map
-    var _with_hp = 0;
+    if (_cnt_all > 3000) _cnt_all = 3000;      // a census, not a sweep of the whole map
     for (var _ai = 0; _ai < _cnt_all; _ai += 1) {
         var _ainst = instance_find(all, _ai);
         if (!instance_exists(_ainst)) continue;
-        var _aobj = _ainst.object_index;
-        var _known = false;
-        for (var _ak = 0; _ak < _n_all; _ak += 1) {
-            if (_all_objs[_ak] == _aobj) { _known = true; break; }
+        array_push(_wlk_ids, _ainst.id);
+        array_push(_wlk_obj, _ainst.object_index);
+        array_push(_wlk_x,   floor(_ainst.x));
+        array_push(_wlk_y,   floor(_ainst.y));
+    }
+    // Worth reporting: what left the world since the last step.
+    var _gone_text = "";
+    var _gone_n = 0;
+    for (var _gp = 0; _gp < array_length(global.coopAllIds); _gp += 1) {
+        var _still = false;
+        for (var _gq = 0; _gq < array_length(_wlk_ids); _gq += 1) {
+            if (_wlk_ids[_gq] == global.coopAllIds[_gp]) { _still = true; break; }
         }
-        if (_known) continue;
-        _all_objs[_n_all] = _aobj;
-        _n_all += 1;
-        // Is this object an enemy? **Only the field says so.** A creature carries `hp`; a
-        // bush, a rock or a building does not. `variable_instance_exists` is the field test
-        // the reference mod proves the loader knows (data.win does not list it, and
-        // data.win is not the loader's function table).
-        if (variable_instance_exists(_ainst, "hp")) {
-            _with_hp += 1;
-            var _is_player = false;
-            if (instance_exists(objPlayer) && _aobj == objPlayer.object_index) _is_player = true;
-            if (!_is_player) array_push(global.coopMobObj, _aobj);
+        if (_still) continue;
+        _gone_n += 1;
+        if (_gone_n <= 4) {
+            _gone_text += " | LEFT obj#" + string(global.coopAllObj[_gp])
+                        + " '" + object_get_name(global.coopAllObj[_gp]) + "'"
+                        + " id " + string(global.coopAllIds[_gp])
+                        + " at " + string(global.coopAllXs[_gp]) + "," + string(global.coopAllYs[_gp]);
         }
     }
-    var _mob_line = "Co-op: enemy census watching " + string(array_length(global.coopMobObj))
-                  + " of the " + string(_with_hp) + " object(s) carrying hp, out of "
-                  + string(_n_all) + " in the world: " + string(global.coopMobObj);
-    Trace(_mob_line);
-    CoopSendDebugLine(_mob_line);
-}
-if (array_length(global.coopMobObj) > 0 && instance_exists(objPlayer)) {
-    var _mob_seen = 0;
-    var _mob_text = "";
-    for (var _mb = 0; _mb < array_length(global.coopMobObj); _mb += 1) {
-        var _mobj   = global.coopMobObj[_mb];
-        var _mcount = instance_number(_mobj);
-        for (var _mi = 0; _mi < _mcount; _mi += 1) {
-            var _minst = instance_find(_mobj, _mi);
-            if (!instance_exists(_minst)) continue;
-            _mob_seen += 1;
-            if (_mob_seen > 6) continue;      // a handful is a census, a list of forty is noise
-            _mob_text += " | obj#" + string(_minst.object_index)
-                       + " '" + object_get_name(_minst.object_index) + "'"
-                       + " id " + string(_minst.id)
-                       + " at " + string(floor(_minst.x)) + "," + string(floor(_minst.y));
-            // **`hp` is only read after asking if it is there.** A missing field is a
-            // hard runtime error, and which objects carry it is exactly the unknown here.
-            if (variable_instance_exists(_minst, "hp")) {
-                _mob_text += " hp " + string(_minst.hp);
-            } else {
-                _mob_text += " hp -";
-            }
-            if (variable_instance_exists(_minst, "hpMax")) {
-                _mob_text += "/" + string(_minst.hpMax);
-            }
-        }
+    global.coopAllIds = _wlk_ids;
+    global.coopAllObj = _wlk_obj;
+    global.coopAllXs  = _wlk_x;
+    global.coopAllYs  = _wlk_y;
+    if (_gone_n > 0) {
+        var _gone_line = "Co-op: " + string(_gone_n) + " thing(s) left the world" + _gone_text;
+        Trace(_gone_line);
+        CoopSendDebugLine(_gone_line);
     }
+    // And, once every couple of seconds, what the world holds - so the next session can see
+    // whether a slime is even in the room.
     global.coopMobTick += 1;
     if (global.coopMobTick mod 120 == 0) {
-        var _mob_line = "Co-op enemies: " + string(_mob_seen) + " in the walk" + _mob_text;
-        Trace(_mob_line);
-        if (global.coopMobSeen != _mob_seen) {
-            global.coopMobSeen = _mob_seen;
-            CoopSendDebugLine(_mob_line);
+        var _name_text = "";
+        var _shown = 0;
+        for (var _s = 0; _s < array_length(_wlk_obj); _s += 1) {
+            if (_shown >= 6) break;
+            var _dupe = false;
+            for (var _t = 0; _t < _s; _t += 1) {
+                if (_wlk_obj[_t] == _wlk_obj[_s]) { _dupe = true; break; }
+            }
+            if (_dupe) continue;
+            _name_text += " " + object_get_name(_wlk_obj[_s]);
+            _shown += 1;
         }
+        var _world_line = "Co-op: " + string(array_length(_wlk_ids))
+                        + " instances in the world, first objects:" + _name_text;
+        Trace(_world_line);
+        CoopSendDebugLine(_world_line);
     }
 }
 

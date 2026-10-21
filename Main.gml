@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.68-m5d";
+global.coopVersion  = "0.0.69-m5e";
 global.coopProtocol = 9;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -152,16 +152,22 @@ global.coopBodyTried = false;
 // peer) could not send a walking sprite at all. The names are asset names, not display
 // strings, so they are not localized.
 global.coopWalkSprite = -1;
-global.coopPeerFrame = 0;      // the peer's frame, as reported (a fraction in this build)
+global.coopPeerFrame = 0;      // the peer's frame index, as reported
+global.coopPeerStep  = 0;      // the peer's sprite step (the index over two ticks)
+global.coopPeerRepeat = 0;     // how many packets have been seen, so a reset is not a start
+global.coopStepMax   = 5;      // the cycle's last frame, learned from the peer's own index
+global.coopRollSpin  = 0;      // seconds of roll spin left on the puppet
+global.coopRollStep  = 0.25;   // how long that spin lasts (the roll's own duration)
 global.coopPeerHold = -1;
 // M3.4: the puppet's animation. **The local cycle is gone** (2026-10-22): a probe showed
-// the peer's own `image_index` is a *timer*, and the puppet is now drawn at the peer's
-// interpolated frame instead of on a cycle of its own - see the frame block further down.
+// the peer's own `image_index` is a *timer*, and the puppet is drawn at the peer's own
+// step - `index / 2` - with no interpolation at all. Interpolation is what put the puppet a
+// packet behind the player; see the frame block further down.
 global.coopPeerWalking = false;
 global.coopDustSprite = -1;
-global.coopDustLastFrame = -1;
-global.coopDustFrame = 0;      // the frame the puff is on - the dust has its own animation
-global.coopDustFrames = 0;     // how many frames that animation has
+global.coopDustFrame = 0;      // the puff's own animation: its sub-image
+global.coopDustFrames = 0;     // how many sub-images it has
+global.coopDustTimer = 0;      // drawn frames until the next sub-image
 // M3.4: the puppet's **drawn** position, which walks toward the reported one.
 //
 // The positions arrive twenty times a second and the game draws sixty times a second, so
@@ -234,25 +240,26 @@ global.coopBushYs     = [];     // its y
 global.coopBushObj    = -2;     // -2 = unresolved, -1 = no such object in this build
 
 // --- M3.5: the enemies ------------------------------------------------------------------
-// The census: which enemy objects exist here (resolved once), and the throttles that keep
-// the diagnostic from becoming a wall of text.
-global.coopMobObj   = [];   // the objects the census watches - built from the live world, once
-global.coopMobTick  = 0;    // steps since the census started - the log throttle's clock
-global.coopMobSeen  = -1;   // how many enemies the census saw when it last reported
-global.coopMobResolved = false;  // the watch list is built from the live world, once
+// **The census is now a diff of the world, not a guess at a field.** Two earlier versions
+// tried to name an enemy up front - by object name, then by `hp` - and both were wrong: the
+// live census that DID fill said "3 of the 4 object(s) carrying hp: { 86, 84, 85 }", which is
+// two bushes and a rock, and no slime at all. So the census observes the one thing true of
+// every killable thing whatever its fields are: **the game removes it from the world**. These
+// four parallel arrays are the previous step's world; each step's world is diffed against
+// them and whatever is missing "left the world".
+global.coopAllIds  = [];   // every instance's id, last step
+global.coopAllObj  = [];   // its object index
+global.coopAllXs   = [];   // its x
+global.coopAllYs   = [];   // its y
+global.coopMobCensus = 0;  // steps the census has run - it compares step N with step N-1
+global.coopMobTick   = 0;  // steps since the census started - the log throttle's clock
+global.coopMobSeen   = -1; // how many enemies the census saw when it last reported
 
 // --- the puppet's frame (M3.4 fix, 2026-10-22) -----------------------------------------
-// `image_index` is a **timer** in this build, not an integer: the peer's own POS showed it
-// climbing `0.00 0.15 0.30 … 5.85 0.00`. So the frame travels as a fraction, and the far
-// end carries it between packets at the rate the packets themselves measure.
-global.coopPeerFrameF    = 0;     // the peer's frame as reported, in frames (fractional)
-global.coopPeerFrameAt   = 0;     // when that report arrived, for the rate below
-global.coopPeerFrameRate = 0;     // frames per millisecond, measured from the packets
-global.coopFrameFloat    = 0;     // the puppet's own carried frame
-global.coopFrameSnap     = true;  // true until a rate is known
-global.coopLoopLen       = 0;     // the cycle's length, learned when the peer's frame wraps
-global.coopFrameWraps    = 0;     // how many wraps seen, so the length is written once
-
+// The frame travels as the game's own `image_index` (hundredths) and is drawn as
+// `index / 2` rounded down: one sprite step per two ticks, measured on the wire. How many
+// steps a real player reaches is learned from the peer's own index, so the puppet never asks
+// the sprite for a frame it does not have.
 // --- The roll probe (answered 2026-10-22) -----------------------------------------------
 // Prints a single line if the player's `angle` ever leaves zero. It never has: the roll is
 // the body frame counter, so this stays quiet unless the build surprises us.

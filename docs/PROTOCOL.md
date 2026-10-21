@@ -50,7 +50,7 @@ Every payload starts with one `u8` command id. All integers little-endian. GameM
 | 3 | `REJECT` | host → client | `string reason` |
 | 4 | `PING` | either | `u32 nonce` |
 | 5 | `PONG` | either | `u32 nonce` |
-| 6 | `POS` | either | `s32 x`, `s32 y`, `u16 angle`, `s8 facing`, `string sprite`, `u8 frame`, `u8 room`, `u16 hold` |
+| 6 | `POS` | either | `s32 x`, `s32 y`, `u16 angle`, `s8 facing`, `string sprite`, `u16 frame`, `u8 room`, `u16 hold` |
 | 7 | `BYE` | either | `string reason` |
 
 ### World sync (M2)
@@ -228,9 +228,15 @@ Notes:
   an asset index, so a peer that is not the game could not say "I am walking" at all and
   the puppet slid instead of walking. The names are asset names, not display strings, so
   they are not localized.
-- **The frame** is `objPlayer.image_index`, the frame the game itself draws the player
-  with. It travels with the sprite, because a frame belongs to a sprite: the frame of a
-  walk cycle drawn on an idle sprite is a frame that does not exist.
+- **The frame** is `objPlayer.image_index` **in hundredths** (protocol 9), the game's own
+  body animation clock. It travels with the sprite, because a frame belongs to a sprite: the
+  frame of a walk cycle drawn on an idle sprite is a frame that does not exist. Measured in
+  this build (2026-10-22): `image_index` is a *timer* (`0.00 0.15 0.30 … 5.85 0.00`), 15 px of
+  walking moved it 3.15, and `PLAYER_WALK_SPEED 90 / SPAWN_ANIM_SPEED 4 = 22.5` — the frame
+  and the walk run off the same speed constant, so **step 2k of the walk is frame k of the
+  sprite** and the cycle is **six** frames. The receiving side draws `index / 2` rounded down
+  and interpolates nothing: interpolating the frame is what put the puppet a packet behind
+  the player. The roll shows as this index being **reset** to 0, which the puppet spins on.
 - **The held item** is an item **id**, and the sprite comes from the game's own item
   database on the receiving side: `ItemGet(id, ItemData.Sprite)`. It is drawn five pixels
   to the side of the way the peer faces and two pixels up, turned on its side — the

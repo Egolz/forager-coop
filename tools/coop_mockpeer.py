@@ -23,7 +23,7 @@ Mod packets (little-endian; GameMaker buffer_string = UTF-8 + NUL):
     4  PING             u32 nonce
     5  PONG             u32 nonce
     6  POS              s32 x, s32 y, u16 angle, s8 facing, string sprite, u16 frame,
-                       u8 room, u16 hold          (frame is in hundredths, protocol 9)
+                       u8 room, u16 hold   (frame = hundredths of the game index, protocol 9)
     7  BYE              string reason
     8  INTENT_PLACE     u32 intentId, u8 room, s32 x, s32 y, string structureName
     9  MUTATION_PLACE   u32 seq, u32 intentId, u8 room, s32 x, s32 y, s32 depth, string name
@@ -207,14 +207,18 @@ def pos(x: int, y: int, angle: int = 0, facing: int = 1,
     produce an asset index, and a peer that is not the game has to be able to say "I am
     walking" too. The frame and the item in the hand ride along with it.
 
-    The frame is in **hundredths** since protocol 9, because a live probe showed the game's
-    `image_index` is a *timer* (`0.00 0.15 0.30 … 5.85 0.00`), not an integer - a byte
-    quantised the walk into a six-step stutter. `image` is still given here as a frame
-    number and multiplied, so the tests read the way the game does.
+    The frame is in **hundredths of the game's own index** since protocol 9. A live probe
+    showed the game's `image_index` is a *timer* (`0.00 0.15 0.30 … 5.85 0.00`), not an
+    integer, and the wire log settled the scaling: 15 px of walking moved the index 3.15,
+    while `PLAYER_WALK_SPEED 90 / SPAWN_ANIM_SPEED 4 = 22.5` - the frame and the walk are
+    driven by the same speed constant, so **step 2k of the walk is frame k of the sprite**
+    and the cycle is **six** frames. A byte threw the timer away and quantised the walk into
+    a six-step stutter. `image` is given here as a step number and multiplied by 2 then by
+    100, so the tests read the way the game does.
     """
     return (bytes([POS]) + struct.pack("<iih", x, y, angle)
             + struct.pack("<b", facing) + p_str(sprite)
-            + struct.pack("<HBH", int(round(image * 100)) & 0xFFFF, room, hold))
+            + struct.pack("<HBH", int(round(image * 2 * 100)) & 0xFFFF, room, hold))
 
 
 def intent_place(intent_id: int, room: int, x: int, y: int, name: str) -> bytes:

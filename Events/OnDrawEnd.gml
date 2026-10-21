@@ -144,41 +144,26 @@ var _y = global.coopDrawY;
 var _face = global.coopPeer.facing;
 if (_face == 0) _face = 1;
 
-// **The animation (M3.4, measured 2026-10-22).** The peer sends the frame the game itself
-// drew it with, and the puppet runs its own cycle from the same numbers.
+// **The animation (M3.4, measured 2026-10-22).** The frame is the peer's own, as sent - there
+// is nothing to run locally.
 //
-// **The measurement.** The peer's own POS shows `image_index` is **not an integer**: it
-// climbs smoothly - `0.00 0.15 0.30 0.45 0.60 … 5.85 0.00` - so the cycle is a **timer of
-// about six frames** (`image_index * 6` is the game frame), it advances about 0.15 a frame,
-// and it keeps running while the player is standing still.
+// Three measurements, each from the owner's own wire log or a probe:
 //
-// Sending `floor(image_index)` threw nine tenths of that away and quantised the walk to a
-// six-step stutter; running a *second* cycle on top of the peer's made the puppet and the
-// player beside it disagree.
+//  * `image_index` is a **timer**, not an integer: `0.00 0.15 0.30 … 5.85 0.00`.
+//  * One sprite step per **two** of its ticks: 15 px of walking moved it 3.15, and
+//    `PLAYER_WALK_SPEED 90 / SPAWN_ANIM_SPEED 4 = 22.5` - the frame and the walk are driven
+//    by the same speed constant, so **step 2k of the walk is frame k of the sprite**.
+//  * The cycle is **six** frames: the index runs `0.00 … 5.85` before wrapping, and the
+//    player covers six steps - about 34 px - between rolls.
 //
-// So there is no local cycle any more: the puppet is drawn at the peer's **interpolated**
-// frame, carried between packets the same way the position is - by the frame's own rate,
-// measured from the packets themselves. Both ends produce the same number from the same
-// input, and the puppet moves when the player moves, stops when the player stops.
-var _frame = 0;
-if (global.coopPeerFrameRate > 0 && !global.coopFrameSnap) {
-    global.coopFrameFloat += global.coopPeerFrameRate * _dt / 1000;
-    // Keep the carried frame near the reported one: it may be up to a packet behind, and a
-    // late packet must not make the puppet run ahead of the player.
-    if (global.coopFrameFloat > global.coopPeerFrameF) {
-        global.coopFrameFloat = global.coopPeerFrameF;
-    }
-    if (global.coopFrameFloat < global.coopPeerFrameF - 1.2) {
-        global.coopFrameFloat = global.coopPeerFrameF - 1.2;
-    }
-} else {
-    global.coopFrameFloat = global.coopPeerFrameF;
-}
-if (global.coopFrameFloat < 0) global.coopFrameFloat = 0;
-_frame = floor(global.coopFrameFloat);
-if (global.coopLoopLen > 0 && _frame >= global.coopLoopLen) {
-    _frame = _frame mod global.coopLoopLen;
-}
+// **What each earlier version got wrong**, so it is not tried again: sending an integer threw
+// the timer away and stuttered; running a *local cycle* of twelve frames made the puppet walk
+// at half the player's rate (the owner: "the puppet's walk animation is lagging"); and
+// **interpolating** the frame carried it a packet behind the player, which is a lag no amount
+// of smoothing hides.
+var _frame = floor(global.coopPeerStep);
+if (_frame < 0) _frame = 0;
+if (_frame > global.coopStepMax) _frame = global.coopStepMax;
 
 // Where the sprite is drawn so that its **feet land on the peer's position**. A sprite's
 // origin is not its top-left corner and not necessarily its bottom either, and
@@ -198,16 +183,28 @@ if (_spr > 0) {
 var _yd = _y - _h + _yo;
 var _top = _yd - _yo;      // the sprite's top edge, in world coordinates
 
-// **The roll (measured, 2026-10-22).** It is **not** a spin, and that is now a measurement
-// rather than a guess: the mod printed its own `objPlayer.angle` and `image_index` while
-// the owner rolled live, and the angle **never left zero** - while `image_index` ran
-// `5.85 -> 0.00 -> 0.15`, i.e. *the body rolled on*. So the roll in this build is the
-// **body frame counter being driven round**, and the puppet shows it for free now that the
-// puppet is drawn at the peer's interpolated frame.
+// **The roll (measured, 2026-10-22).** It is **not** a spin: the mod printed its own
+// `objPlayer.angle` while the owner rolled live and it **never left zero**. What the index
+// does instead is **reset** - `5.85 -> 0.00` - and that reset is the only mark of a roll the
+// wire carries.
 //
+// So the puppet spins on the reset: `global.coopRollSpin` is set from the packet handler for
+// a quarter of a second, and the sprite is turned through a full circle over that time. The
+// game's own roll is a spin of the body - it has no sprite of its own, which is why the
+// assets are only idle and walk - so a turn is what it should look like.
+if (global.coopRollSpin > 0) {
+    global.coopRollSpin -= _dt / 1000;
+    if (global.coopRollSpin < 0) global.coopRollSpin = 0;
+}
+var _roll_angle = 0;
+if (global.coopRollStep > 0) {
+    // 0 -> 360 degrees as the spin runs out.
+    _roll_angle = 360 * (1 - global.coopRollSpin / global.coopRollStep);
+}
+
 // The angle is still carried and still drawn: the reference mod draws its puppet with it,
-// and if this build ever turns the player, the turn should show. It is simply not what the
-// roll is.
+// and if this build ever turns the player, the turn should show. On top of it goes the roll.
+var _draw_angle = global.coopPeer.angle + _roll_angle;
 
 // **What decides the dust is the packet, not the sprite name.** Two rewrites of the frame
 // code dropped the `_walking` local and left the dust test below reading a variable that no
@@ -217,7 +214,7 @@ var _top = _yd - _yo;      // the sprite's top edge, in world coordinates
 // "nothing is drawn any more". The walking flag lives in a global; read it from there.
 var _walking = global.coopPeerWalking;
 if (_spr > 0) {
-    draw_sprite_ext(_spr, _frame, _x, _yd, _face, 1, global.coopPeer.angle, c_white, 0.85);
+    draw_sprite_ext(_spr, _frame, _x, _yd, _face, 1, _draw_angle, c_white, 0.85);
 }
 
 // **The dust the player kicks up while walking.**
@@ -240,38 +237,33 @@ if (_spr > 0) {
 if (_walking) {
     if (global.coopDustSprite <= 0) {
         global.coopDustSprite = asset_get_index("sprDust");
-        global.coopDustFrames = 0;
-        if (global.coopDustSprite > 0) {
-            // **How many frames the puff has, asked honestly.** There is no
-            // `sprite_get_num_subimages` in this build (data.win lists it, and the loader is
-            // not data.win), so the count comes from the one number the build does give: a
-            // sprite's frames are stored side by side in a strip, so the image width is
-            // `frame_width * frames`. `sprite_get_width` on a multi-frame sprite returns the
-            // *strip's* width in this build - 8 frames of a small puff is a wide strip - so
-            // the count is derived from the width and the height, which a puff keeps square.
-            var _dw_all = sprite_get_width(global.coopDustSprite);
-            var _dh_one = sprite_get_height(global.coopDustSprite);
-            global.coopDustFrames = 8;
-            if (_dw_all > 0 && _dh_one > 0) {
-                var _guess = round(_dw_all / _dh_one);
-                if (_guess >= 1 && _guess <= 32) global.coopDustFrames = _guess;
-            }
-        }
+        // **How many frames the puff has.** There is no `sprite_get_num_subimages` in this
+        // build, and a wrong guess is invisible rather than fatal: a frame past the end draws
+        // nothing, so the counter is clamped below and the alpha is low. Four is the honest
+        // guess for a puff, and `sprDust` is small.
+        global.coopDustFrames = 4;
+        if (global.coopDustSprite <= 0) global.coopDustFrames = 0;
     }
     if (global.coopDustSprite > 0 && global.coopDustFrames > 0) {
-        global.coopDustFrame += 1;
-        if (global.coopDustFrame >= global.coopDustFrames * 4) global.coopDustFrame = 0;
-        var _dsub = floor(global.coopDustFrame / 4) mod global.coopDustFrames;
+        // **The puff runs on its own clock, not the walk cycle.** Tying it to the walk was the
+        // mistake twice over: the walk cycle is six steps to the player's half-second, so a
+        // puff that advanced with it moved in visible jerks and then sat still. This is a
+        // free-running counter - one sub-image every fourth drawn frame, about fifteen puffs a
+        // second - so the dust animates while the puppet walks.
+        global.coopDustTimer += 1;
+        if (global.coopDustTimer >= 4) {
+            global.coopDustTimer = 0;
+            global.coopDustFrame += 1;
+            if (global.coopDustFrame >= global.coopDustFrames) global.coopDustFrame = 0;
+        }
         var _dh = sprite_get_height(global.coopDustSprite);
         var _dyo = sprite_get_yoffset(global.coopDustSprite);
-        var _dw = sprite_get_width(global.coopDustSprite);
-        global.coopDustLastFrame = _dsub;
         var _ddy = _y - _dh + _dyo;
         // **Twice as wide as tall.** Forager's players move left and right almost all the
         // time, and `sprDust` is a soft round puff; stretched horizontally it reads as the
         // smear a foot leaves on the ground rather than as a ball.
-        draw_sprite_ext(global.coopDustSprite, _dsub, _x - _face * 6, _ddy, 2, 1, 0,
-                        c_white, 0.75);
+        draw_sprite_ext(global.coopDustSprite, global.coopDustFrame, _x - _face * 6, _ddy,
+                        2, 1, 0, c_white, 0.75);
     }
 }
 

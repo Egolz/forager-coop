@@ -44,12 +44,14 @@ enum CoopCmd {
     SNAP_STRUCT      = 18   // host -> client: a chunk of the world's structures
 }
 
-global.coopVersion  = "0.0.60-m3z";
-global.coopProtocol = 6;   // 1 = presence only (M1); 2 adds the world-sync packets;
+global.coopVersion  = "0.0.61-m4a";
+global.coopProtocol = 7;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
                            // 5 adds the player name to HELLO/WELCOME (M3.1);
-                           // 6 adds the world snapshot (SNAP_LAND, SNAP_STRUCT)
+                           // 6 adds the world snapshot (SNAP_LAND, SNAP_STRUCT);
+                           // 7 changes POS: the sprite travels by name, and the
+                           //     animation frame and the held item travel with it
                            //
                            // The number moves when the **wire format** moves, not when a
                            // feature is added. 5 was free again after a rejected CMD
@@ -63,6 +65,13 @@ global.coopProtocol = 6;   // 1 = presence only (M1); 2 adds the world-sync pack
                            // peer that does not know it would silently receive no land at
                            // all - a client whose island never becomes the host's island,
                            // with no error anywhere. Better to refuse the join.
+                           //
+                           // 7 changes a packet that already existed: POS carried the
+                           // sprite as an **asset index**, and only a real game can produce
+                           // one - a peer that is not the game (the mock peer) could not
+                           // send a walking sprite at all. The sprite now travels as a
+                           // short name ("idle", "walk"), which both ends can resolve, and
+                           // the frame and the held item ride along with it.
 global.coopPort     = 6511;
 global.coopPlaceRange = 448;   // see Net.gml: how far a client may place from itself
 global.coopSolidRadius = 16;   // see Net.gml: how close counts as the same build-cell
@@ -131,6 +140,19 @@ global.coopRemoteInstances = [];
 // a property of the instance. See CoopResolveBodySprite.
 global.coopBodySprite = -1;
 global.coopBodyTried = false;
+// M3.4: the peer's animation. The sprite travels by **name** ("idle" / "walk"), because
+// only a real game can produce an asset index - a peer that is not the game (the mock
+// peer) could not send a walking sprite at all. The names are asset names, not display
+// strings, so they are not localized.
+global.coopWalkSprite = -1;
+global.coopPeerFrame = 0;
+global.coopPeerHold = -1;
+// The last position we sent, to tell "walking" from "standing still": the player's
+// sprite is idle or walk, and the instance does not carry it (the body is drawn from a
+// constant asset), so the movement is what says which.
+global.coopLastX = 0;
+global.coopLastY = 0;
+global.coopLastMoved = false;
 // Where the peer is actually drawn. The host decides, because the host is the side that
 // knows the world - a peer with no physics (the mock) reports a position inside a tree or in
 // the water, and the host pulls it onto ground a body could stand on.

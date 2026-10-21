@@ -155,9 +155,16 @@ def pong(nonce: int) -> bytes:
 
 
 def pos(x: int, y: int, angle: int = 0, facing: int = 1,
-        sprite: int = -1, image: int = 0, room: int = 0) -> bytes:
-    return (bytes([POS]) + struct.pack("<iihbiBB", x, y, angle, facing,
-                                       sprite, image, room))
+        sprite: str = "", image: int = 0, room: int = 0, hold: int = 65535) -> bytes:
+    """The peer's position (packet 6).
+
+    The sprite travels **by name** ("idle" / "walk") since protocol 7: only a real game can
+    produce an asset index, and a peer that is not the game has to be able to say "I am
+    walking" too. The frame and the item in the hand ride along with it.
+    """
+    return (bytes([POS]) + struct.pack("<iih", x, y, angle)
+            + struct.pack("<b", facing) + p_str(sprite)
+            + struct.pack("<BBH", image, room, hold))
 
 
 def intent_place(intent_id: int, room: int, x: int, y: int, name: str) -> bytes:
@@ -288,11 +295,22 @@ def parse_one(buf: bytes):
         (nonce,) = struct.unpack("<I", buf[1:5])
         return {"cmd": cmd, "name": NAMES[cmd], "nonce": nonce}, 5
     if cmd == POS:
-        if len(buf) < 18:
+        # cmd | s32 x | s32 y | u16 angle | s8 facing | string sprite | u8 frame | u8 room | u16 hold
+        if len(buf) < 17:
             return None, 0
-        x, y, angle, facing, sprite, image, room = struct.unpack("<iihbiBB", buf[1:18])
+        x, y, angle = struct.unpack("<iih", buf[1:11])
+        (facing,) = struct.unpack("<b", buf[11:12])
+        s = _read_str(buf, 12)
+        if s is None:
+            return None, 0
+        sprite, i = s
+        if i + 4 > len(buf):
+            return None, 0
+        image, room, hold = struct.unpack("<BBH", buf[i:i + 4])
+        i += 4
         return {"cmd": cmd, "name": NAMES[cmd], "x": x, "y": y, "angle": angle,
-                "facing": facing, "sprite": sprite, "image": image, "room": room}, 18
+                "facing": facing, "sprite": sprite, "image": image, "room": room,
+                "hold": hold}, i
     if cmd in (REJECT, BYE):
         s = _read_str(buf, 1)
         if s is None:
@@ -437,8 +455,8 @@ def describe(pkt: dict) -> str:
         return f"{name} nonce={pkt['nonce']}"
     if name == "POS":
         return (f"POS x={pkt['x']} y={pkt['y']} angle={pkt['angle']} "
-                f"facing={pkt['facing']} sprite={pkt['sprite']} "
-                f"image={pkt['image']} room={pkt['room']}")
+                f"facing={pkt['facing']} sprite={pkt['sprite']!r} "
+                f"frame={pkt['image']} room={pkt['room']} hold={pkt['hold']}")
     if name == "MUTATION_PLACE":
         return (f"MUTATION seq={pkt['seq']} intent=#{pkt['intentId']} room={pkt['room']} "
                 f"'{pkt['structure']}' at {pkt['x']},{pkt['y']} depth {pkt['depth']}")
@@ -521,6 +539,9 @@ class Peer:
         self.struct_count = 0
         self.struct_sent = False
         self.struct_on_hello = False
+        # M3.4: the animation frame the mock is on, and the item it holds (65535 = none).
+        self.frame = 0
+        self.hold_item = 65535
         self.host_spot: tuple[int, int] | None = None   # where the host stands
         # The scripted loot is **destructive in a live world** - a drop at a fixed tile makes
         # the game spawn a pickup inside whatever stands there, and the tree it was in goes.
@@ -901,7 +922,12 @@ class Peer:
         px, py = self.player if self.player else (620, 620)
         self.host_spot = (px, py)
         hx, hy = self.host_spot
-        self.send(pos(hx, hy, angle=0, facing=1, sprite=-1, image=0, room=self.room))
+        # **The animation (M3.4).** The mock has no body of its own, but it can still say
+        # that it is walking and which frame of the walk cycle it is on - and that is
+        # what makes the puppet on the other side move its legs instead of sliding.
+        self.frame = (self.frame + 1) % 4
+        self.send(pos(hx, hy, angle=0, facing=1, sprite="walk", image=self.frame,
+                      room=self.room, hold=self.hold_item))
         # M3.1: the world snapshot. The mock has no world, so it sends the one cell it
         # knows is land - the cell under the player - with the "remove what the host
         # does not have" flag **off**. A fake land set must never be able to take the
@@ -1012,7 +1038,8 @@ class Peer:
             else:
                 ax = ay = None
             if ax is not None:
-                self.send(pos(ax, ay, angle=0, facing=1, sprite=-1, image=0, room=self.room))
+                self.send(pos(ax, ay, angle=0, facing=1, sprite="walk", image=self.frame,
+                              room=self.room, hold=self.hold_item))
         # ask the host to build something; retry other spots on a spot refusal
         # (water or occupancy), and after a success start the next round, so a run
         # shows the refusal *and* a build - and, with a second round, a spot that is
@@ -1099,7 +1126,7 @@ def run_selftest() -> int:
     """Round-trip every packet we can build, so a field-order slip cannot hide."""
     cases = [
         (hello(), "HELLO"), (welcome(), "WELCOME"), (ping(7), "PING"),
-        (pong(7), "PONG"), (pos(1, 2, 3, -1, 5, 6, 8), "POS"),
+        (pong(7), "PONG"), (pos(1, 2, 3, -1, "walk", 6, 8), "POS"),
         (intent_place(9, 8, 10, 20, "forge"), "INTENT_PLACE"),
         (bye("byebye"), "BYE"),
     ]
@@ -1360,7 +1387,7 @@ def _drain(s: socket.socket, seconds: float) -> bytes:
 
 
 def run_server(port: int, loot: bool = False, echo: bool = False,
-               land: bool = False, struct: bool = False) -> None:
+               land: bool = False, struct: bool = False, hold: int = 65535) -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # The port may still be held by a game that is hosting and has not let go of it yet, so
@@ -1389,6 +1416,7 @@ def run_server(port: int, loot: bool = False, echo: bool = False,
         peer.echo_structure = echo
         peer.land_on_hello = land
         peer.struct_on_hello = struct
+        peer.hold_item = hold
         try:
             while True:
                 peer.pump()
@@ -1440,6 +1468,10 @@ def main() -> int:
                          "has no buildings, so it sends one - a furnace, row 1 of the real "
                          "structure database - at the player's feet, with the 'remove the "
                          "buildings this side has and the host does not' flag off")
+    ap.add_argument("--hold", type=int, default=65535,
+                    help="server mode: the item id the peer holds (65535 = none). The far "
+                         "end draws it with the game's own ItemGet(id, ItemData.Sprite) - "
+                         "item 0 is wood")
     args = ap.parse_args()
     place = "" if args.no_place else args.place
     try:
@@ -1452,7 +1484,7 @@ def main() -> int:
             run_probe(args.host, args.port, settle=4.0)
         else:
             run_server(args.port, loot=args.loot, echo=args.echo, land=args.land,
-                       struct=args.struct)
+                       struct=args.struct, hold=args.hold)
     except KeyboardInterrupt:
         log("bye")
     return 0

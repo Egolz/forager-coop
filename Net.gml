@@ -283,6 +283,31 @@ if (!global.coopBodyTried) {
     if (global.coopBodySprite <= 0) global.coopBodySprite = asset_get_index("Player Idle");
 }
 
+#define CoopResolvePeerSprite(_name)
+// -> the asset index of the sprite the peer asked for, or -1.
+//
+// The peer sends the sprite **by name** ("idle" / "walk"), because only a real game can
+// produce an asset index - and a peer that is not the game (the mock peer) has to be able
+// to say "I am walking" too, or the puppet stands still while the player walks past.
+//
+// The two names are resolved once and cached: `asset_get_index` in a draw path, twenty
+// times a second, is a lookup the game does not need to do twice.
+if (_name == "walk") {
+    if (global.coopWalkSprite <= 0) {
+        global.coopWalkSprite = asset_get_index("sprPlayerWalk");
+        if (global.coopWalkSprite <= 0) global.coopWalkSprite = asset_get_index("Player Walk");
+    }
+    if (global.coopWalkSprite > 0) return global.coopWalkSprite;
+}
+if (_name == "idle") {
+    CoopResolveBodySprite();
+    if (global.coopBodySprite > 0) return global.coopBodySprite;
+}
+// An unknown or empty name: the peer's own body sprite stands in, exactly as before.
+CoopResolveBodySprite();
+if (global.coopBodySprite > 0) return global.coopBodySprite;
+return -1;
+
 #define CoopStandSpot(_x, _y, _mode)
 // Where a peer or a structure may be **put**: the reported position if it can go there,
 // else the nearest place where it can. Sets `global.coopStandX` / `global.coopStandY`.
@@ -374,18 +399,39 @@ buffer_write(_b, buffer_s32, floor(objPlayer.x));
 buffer_write(_b, buffer_s32, floor(objPlayer.y));
 buffer_write(_b, buffer_u16, floor(objPlayer.angle));
 buffer_write(_b, buffer_s8, floor(objPlayer.facing));
-// The sprite the peer should draw. **Not** `objPlayer.sprite_index`: that reads 0 in this
-// build - the body is drawn from a constant asset, not from the instance - so a peer that
-// sent it could not be drawn at all. See CoopResolveBodySprite.
-CoopResolveBodySprite();
-buffer_write(_b, buffer_s32, global.coopBodySprite);
+// The sprite the peer should draw, **by name** (M3.4).
+//
+// It used to be an asset index, and that was the mod talking to another mod: only a real
+// game can produce an asset index, so a peer that is not the game - the mock peer - could
+// not say "I am walking" at all, and the puppet stood still while the player walked past.
+// The names are asset names ("idle", "walk"), not display strings, so they are not
+// localized and both ends resolve them the same way.
+//
+// **Which one is it?** The player's instance does not carry the sprite: the body is drawn
+// from a constant asset, and the instance reports `sprite_index` 0 (live body probe,
+// 2026-10-21). So the movement is what says which: the sprite is `walk` when the player
+// moved since the last frame we sent, and `idle` otherwise.
+if (floor(objPlayer.x) != global.coopLastX || floor(objPlayer.y) != global.coopLastY) {
+    global.coopLastMoved = true;
+} else {
+    global.coopLastMoved = false;
+}
+global.coopLastX = floor(objPlayer.x);
+global.coopLastY = floor(objPlayer.y);
+buffer_write(_b, buffer_string, global.coopLastMoved ? "walk" : "idle");
+// The animation frame. `objPlayer.image_index` is the frame the game itself draws the
+// player with, so it is the right number to send - and it is an integer in this build,
+// not a timer.
+//
 // `mod` in GML keeps the sign of the dividend, so a negative image_index would write a
-// negative value into a **u8** field - a byte write outside the field's range, in a buffer
-// that is then handed to the network layer. Normalising to 0..255 first is one `abs` and
-// removes the whole class of risk, at the cost of nothing (the receiver only uses this as an
-// animation frame hint).
+// negative value into a **u8** field - a byte write outside the field's range, in a
+// buffer that is then handed to the network layer. Normalising to 0..255 first is one
+// `abs` and removes the whole class of risk.
 buffer_write(_b, buffer_u8, abs(floor(objPlayer.image_index)) mod 256);
 buffer_write(_b, buffer_u8, objPlayer.room);
+// The item in the peer's hand, as an item id (-1 = none). The far end turns it into a
+// sprite with the game's own `ItemGet(id, ItemData.Sprite)`.
+buffer_write(_b, buffer_u16, 65535);
 CoopSend(_b);
 
 // ---------------------------------------------------------------------------
@@ -1930,9 +1976,11 @@ switch (_cmd) {
         global.coopPeer.y      = buffer_read(_buf, buffer_s32);
         global.coopPeer.angle  = buffer_read(_buf, buffer_u16);
         global.coopPeer.facing = buffer_read(_buf, buffer_s8);
-        global.coopPeer.sprite = buffer_read(_buf, buffer_s32);
-        global.coopPeer.image  = buffer_read(_buf, buffer_u8);
+        // The sprite **by name** (M3.4), the animation frame and the held item.
+        global.coopPeer.sprite = CoopResolvePeerSprite(buffer_read(_buf, buffer_string));
+        global.coopPeerFrame   = buffer_read(_buf, buffer_u8);
         global.coopPeer.room   = buffer_read(_buf, buffer_u8);
+        global.coopPeerHold    = buffer_read(_buf, buffer_u16);
         global.coopPeer.seen   = true;
         break;
 

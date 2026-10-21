@@ -50,7 +50,7 @@ Every payload starts with one `u8` command id. All integers little-endian. GameM
 | 3 | `REJECT` | host → client | `string reason` |
 | 4 | `PING` | either | `u32 nonce` |
 | 5 | `PONG` | either | `u32 nonce` |
-| 6 | `POS` | either | `s32 x`, `s32 y`, `u16 angle`, `s8 facing`, `s32 sprite`, `u8 image`, `u8 room` |
+| 6 | `POS` | either | `s32 x`, `s32 y`, `u16 angle`, `s8 facing`, `string sprite`, `u8 frame`, `u8 room`, `u16 hold` |
 | 7 | `BYE` | either | `string reason` |
 
 ### World sync (M2)
@@ -223,6 +223,19 @@ Notes:
 - **POS** is the one packet that is not host-authoritative: each player sends their own
   position and the receiver just draws it. It is cosmetic and latency-sensitive, so it goes
   out every 3 steps (≈20/s) rather than on the system-step cadence.
+- **The sprite travels by name** (M3.4, protocol 7): `"idle"` or `"walk"`. It used to be an
+  asset index, and that only ever worked between two mods — only a real game can produce
+  an asset index, so a peer that is not the game could not say "I am walking" at all and
+  the puppet slid instead of walking. The names are asset names, not display strings, so
+  they are not localized.
+- **The frame** is `objPlayer.image_index`, the frame the game itself draws the player
+  with. It travels with the sprite, because a frame belongs to a sprite: the frame of a
+  walk cycle drawn on an idle sprite is a frame that does not exist.
+- **The held item** is an item **id**, and the sprite comes from the game's own item
+  database on the receiving side: `ItemGet(id, ItemData.Sprite)`. It is drawn five pixels
+  to the side of the way the peer faces and two pixels up, turned on its side — the
+  reference mod's shape. The ids 114..129 are drawn upright instead, which is its
+  judgement about which items look wrong rotated.
 - **`room`** is `objPlayer.room` as a byte. Room **8** is the main world; other values are
   menus/UI rooms. A marker is only drawn when the peer's room matches yours.
 - GameMaker buffer writes take reals, so integer fields go through `floor()` to avoid

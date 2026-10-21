@@ -78,6 +78,12 @@ var _y = global.coopStandY;
 var _face = global.coopPeer.facing;
 if (_face == 0) _face = 1;
 
+// **The animation frame (M3.4).** The peer sends the frame it is on, and the frame belongs
+// to the sprite it sent, so the two travel together: the game draws the player with
+// `objPlayer.image_index` and sends the same number, and a peer that is not the game sends
+// a frame of the walk cycle.
+var _frame = global.coopPeerFrame;
+
 // Where the sprite is drawn so that its **feet land on the peer's position**. A sprite's
 // origin is not its top-left corner and not necessarily its bottom either, and
 // `sprite_get_yoffset` says how far down the origin sits inside the image - so the image's
@@ -97,7 +103,31 @@ var _yd = _y - _h + _yo;
 var _top = _yd - _yo;      // the sprite's top edge, in world coordinates
 
 if (_spr > 0) {
-    draw_sprite_ext(_spr, 0, _x, _yd, _face, 1, 0, c_white, 0.85);
+    draw_sprite_ext(_spr, _frame, _x, _yd, _face, 1, 0, c_white, 0.85);
+}
+
+// **The item in the peer's hand (M3.4).** The peer sends the item's **id**, and the
+// sprite comes from the game's own item database: `ItemGet(id, ItemData.Sprite)` - the
+// same call the reference mod makes, which is the only proof that the enum member and the
+// call shape are right in this build.
+//
+// It is drawn beside the body, five pixels to the side of the way the peer faces and two
+// pixels up, turned on its side - the reference mod's shape, which is what makes the
+// held thing read as held rather than as a dropped item.
+//
+// The item ids 114..129 are the ones the reference mod draws **upright** rather than on
+// their side; that is its own judgement about which items look wrong rotated, and it is
+// copied here rather than reinvented.
+if (global.coopPeerHold >= 0 && global.coopPeerHold < 65535) {
+    var _hold_spr = ItemGet(global.coopPeerHold, ItemData.Sprite);
+    if (typeof(_hold_spr) == "number" && _hold_spr > 0) {
+        var _hold_rot = 90 * _face;
+        if (global.coopPeerHold >= 114 && global.coopPeerHold <= 129 && _face == 1) {
+            _hold_rot = 90;
+        }
+        draw_sprite_ext(_hold_spr, _hold_spr, _x + (_face == 1 ? -5 : 5), _y - 2, 1, 1,
+                        _hold_rot, c_white, 0.85);
+    }
 }
 
 // The name, centred over the puppet.

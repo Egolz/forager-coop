@@ -116,6 +116,7 @@ ITEM_TABLE = 13
 DROP, PICKUP, RESOURCE_DESTROY = 14, 15, 16
 SNAP_LAND = 17
 SNAP_STRUCT = 18
+MOB = 19
 
 NAMES = {
     HELLO: "HELLO", WELCOME: "WELCOME", REJECT: "REJECT",
@@ -124,7 +125,7 @@ NAMES = {
     INTENT_REJECTED: "INTENT_REJECTED", STRUCTURE_TABLE: "STRUCTURE_TABLE",
     DEBUG_LINE: "DEBUG_LINE", ITEM_TABLE: "ITEM_TABLE",
     DROP: "DROP", PICKUP: "PICKUP", RESOURCE_DESTROY: "RESOURCE_DESTROY",
-    SNAP_LAND: "SNAP_LAND", SNAP_STRUCT: "SNAP_STRUCT",
+    SNAP_LAND: "SNAP_LAND", SNAP_STRUCT: "SNAP_STRUCT", MOB: "MOB",
 }
 
 # structures to try to build if we are not told which one (first match wins)
@@ -278,6 +279,17 @@ def snap_struct(room: int, gen: int, flags: int,
     for x, y, sid in entries:
         out += struct.pack("<HHH", x, y, sid)
     return out
+
+
+def mob(kind: int, x: int, y: int, inst_id: int, obj: int) -> bytes:
+    """A mob appeared (kind 0) or died (kind 1) - packet 19.
+
+    The mob is identified by its **instance id**, its **object index** and its position -
+    the three numbers the reference mod's ENEMY packet carries. The id is the identity;
+    the position is the fallback, because the ids do not always line up between two
+    machines.
+    """
+    return bytes([MOB]) + struct.pack("<Biiii", kind, x, y, inst_id, obj)
 
 
 def bye(reason: str) -> bytes:
@@ -480,6 +492,13 @@ def parse_one(buf: bytes):
             entries.append((x, y, sid))
         return {"cmd": cmd, "name": NAMES[cmd], "room": room, "gen": gen,
                 "flags": flags, "entries": entries}, i
+    if cmd == MOB:
+        if len(buf) < 18:
+            return None, 0
+        kind = buf[1]
+        x, y, inst_id, obj = struct.unpack("<iiii", buf[2:18])
+        return {"cmd": cmd, "name": NAMES[cmd], "kind": kind, "x": x, "y": y,
+                "id": inst_id, "object": obj}, 18
     if cmd == DEBUG_LINE:
         s = _read_str(buf, 1)
         if s is None:
@@ -527,6 +546,10 @@ def describe(pkt: dict) -> str:
         return (f"SNAP_LAND room={pkt['room']} gen={pkt['gen']} flags={pkt['flags']} "
                 f"cells={_n}"
                 + (f" first={_first[0]},{_first[1]} last={_last[0]},{_last[1]}" if _n else ""))
+    if name == "MOB":
+        _what = "appeared" if pkt["kind"] == 0 else "died"
+        return (f"MOB {_what} obj#{pkt['object']} at {pkt['x']},{pkt['y']} "
+                f"id {pkt['id']}")
     if name == "SNAP_STRUCT":
         _n = len(pkt["entries"])
         _first = pkt["entries"][0] if _n else None
@@ -591,6 +614,9 @@ class Peer:
         self.angle = 0
         self.spin = False
         self.facing = 1
+        self.mob_sent = False
+        self.mob_on_hello = False
+        self.mob_object = 0
         self.host_spot: tuple[int, int] | None = None   # where the host stands
         # The scripted loot is **destructive in a live world** - a drop at a fixed tile makes
         # the game spawn a pickup inside whatever stands there, and the tree it was in goes.
@@ -856,8 +882,12 @@ class Peer:
             # that follows is impossible to find.
             if self.player != self.pos_logged:
                 self.pos_logged = self.player
+                # **The angle and the frame are logged too.** They are what says whether the
+                # game turns the character (a roll is a spin, and the spin is the angle) and
+                # which frame of the walk cycle the player is on - and the log is the only
+                # place that can answer it from the outside.
                 log(f"   pos {pkt['x']},{pkt['y']} room {pkt['room']}"
-                    + f" facing {pkt['facing']}")
+                    f" facing {pkt['facing']} angle {pkt['angle']} frame {pkt['image']}")
         elif name == "DEBUG_LINE":
             # The mod's own console, forwarded: this game's mods cannot write
             # files, so a long dump arrives here and we write it down.
@@ -1035,6 +1065,13 @@ class Peer:
             log(f"-> SNAP_STRUCT 1 structure (id 1) at {_sx},{_sy} (the player's own cell)")
             self.send(snap_struct(self.room, 1, 0, []))
             log("-> SNAP_STRUCT end of snapshot")
+        # M3.5: a mob appearing. The far end creates it - a slime on the owner's island.
+        if self.mob_on_hello and not self.mob_sent and self.player is not None:
+            self.mob_sent = True
+            _mx = int(px // 16) * 16 + 8
+            _my = int(py // 16) * 16 + 8
+            self.send(mob(0, _mx, _my, 101234, self.mob_object))
+            log(f"-> MOB appeared obj#{self.mob_object} at {_mx},{_my}")
 
     def choose_structure(self) -> str | None:
         if self.place_wanted:
@@ -1228,6 +1265,7 @@ def run_selftest() -> int:
     lnd_end = snap_land(8, 3, 1, [])
     strc = snap_struct(8, 4, 1, [(640, 704, 1), (656, 704, 5)])
     strc_end = snap_struct(8, 4, 1, [])
+    mbo = mob(0, 640, 704, 101234, 55)
     extra_cases = [
         (mut, "MUTATION_PLACE", {"seq": 12, "intentId": 9, "x": 640, "y": 704,
                                  "depth": -10, "structure": "forge"}),
@@ -1244,6 +1282,7 @@ def run_selftest() -> int:
         (strc, "SNAP_STRUCT", {"room": 8, "gen": 4, "flags": 1,
                                 "entries": [(640, 704, 1), (656, 704, 5)]}),
         (strc_end, "SNAP_STRUCT", {"room": 8, "gen": 4, "flags": 1, "entries": []}),
+        (mbo, "MOB", {"kind": 0, "x": 640, "y": 704, "id": 101234, "object": 55}),
     ]
     for payload, name, checks in extra_cases:
         try:
@@ -1458,7 +1497,7 @@ def _drain(s: socket.socket, seconds: float) -> bytes:
 
 def run_server(port: int, loot: bool = False, echo: bool = False,
                land: bool = False, struct: bool = False, hold: int = 65535,
-               spin: bool = False) -> None:
+               spin: bool = False, mob: bool = False) -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # The port may still be held by a game that is hosting and has not let go of it yet, so
@@ -1489,6 +1528,7 @@ def run_server(port: int, loot: bool = False, echo: bool = False,
         peer.struct_on_hello = struct
         peer.hold_item = hold
         peer.spin = spin
+        peer.mob_on_hello = mob
         try:
             while True:
                 peer.pump()
@@ -1548,6 +1588,10 @@ def main() -> int:
                     help="server mode: turn the puppet round and round. Forager's roll has "
                          "no sprite of its own - the player spins - so this is what a roll "
                          "looks like on the other side")
+    ap.add_argument("--mob", action="store_true",
+                    help="server mode: announce that a mob appeared next to the player. The "
+                         "far end creates it - a slime in the owner's world, which the owner "
+                         "can kill. Off by default: it puts a live enemy on their island")
     args = ap.parse_args()
     place = "" if args.no_place else args.place
     try:
@@ -1560,7 +1604,7 @@ def main() -> int:
             run_probe(args.host, args.port, settle=4.0)
         else:
             run_server(args.port, loot=args.loot, echo=args.echo, land=args.land,
-                       struct=args.struct, hold=args.hold, spin=args.spin)
+                       struct=args.struct, hold=args.hold, spin=args.spin, mob=args.mob)
     except KeyboardInterrupt:
         log("bye")
     return 0

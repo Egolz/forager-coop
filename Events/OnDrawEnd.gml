@@ -192,13 +192,27 @@ if (_spr > 0) {
 // cycle started, which is about two puffs a second - too few to see (the owner saw none at
 // all, live, 2026-10-22). The cycle runs about ten frames a second, so that is a puff
 // every tenth of a second, which is what a walking player's dust looks like.
+//
+// **The dust is placed by its own metrics, not the body's.** The first version drew it at
+// the body's draw position, which is where the body is *hung* - about two dozen pixels
+// above the ground - so the dust floated in the air and, being small, was invisible. A
+// sprite stands on the ground the same way the body does: its bottom edge goes to the
+// ground, so its draw position is `ground - height + yoffset`, with the **dust's** own
+// height and offset.
 if (_walking) {
     if (global.coopDustSprite <= 0) {
         global.coopDustSprite = asset_get_index("sprDust");
     }
     if (global.coopDustSprite > 0 && _frame != global.coopDustLastFrame) {
         global.coopDustLastFrame = _frame;
-        draw_sprite_ext(global.coopDustSprite, 0, _x - _face * 5, _yd, 1, 1, 0,
+        var _dh = 8;
+        var _dyo = 0;
+        if (global.coopDustSprite > 0) {
+            _dh = sprite_get_height(global.coopDustSprite);
+            _dyo = sprite_get_yoffset(global.coopDustSprite);
+        }
+        var _ddy = _y - _dh + _dyo;
+        draw_sprite_ext(global.coopDustSprite, 0, _x - _face * 5, _ddy, 1, 1, 0,
                         c_white, 0.5);
     }
 }

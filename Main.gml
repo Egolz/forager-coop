@@ -41,17 +41,20 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16,  // either way: a resource (tree/rock/...) was harvested
     // --- M3.1: the world snapshot ---
     SNAP_LAND        = 17,  // host -> client: a chunk of the world's land cells
-    SNAP_STRUCT      = 18   // host -> client: a chunk of the world's structures
+    SNAP_STRUCT      = 18,  // host -> client: a chunk of the world's structures
+    // --- M3.5: the enemies ---
+    MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.64-m4d";
-global.coopProtocol = 7;   // 1 = presence only (M1); 2 adds the world-sync packets;
+global.coopVersion  = "0.0.65-m5a";
+global.coopProtocol = 8;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
                            // 5 adds the player name to HELLO/WELCOME (M3.1);
                            // 6 adds the world snapshot (SNAP_LAND, SNAP_STRUCT);
                            // 7 changes POS: the sprite travels by name, and the
-                           //     animation frame and the held item travel with it
+                           //     animation frame and the held item travel with it;
+                           // 8 adds MOB, the enemies appearing and dying
                            //
                            // The number moves when the **wire format** moves, not when a
                            // feature is added. 5 was free again after a rejected CMD

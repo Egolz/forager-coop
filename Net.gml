@@ -1235,6 +1235,82 @@ CoopSendDebugLine("Co-op: structure snapshot sent - " + string(_ss_total)
                   + " structures in room " + string(_ss_room) + ".");
 }
 
+#define CoopSendMob(_kind, _x, _y, _id, _obj)
+// A mob appeared (_kind 0) or died (_kind 1).
+//
+// The mob is identified by its **instance id** plus its **object index** and its position -
+// the three numbers the reference mod's `ENEMY` packet carries. The id is the identity
+// (two installs of the same world create the same instances in the same order), and the
+// position is the fallback, because the ids do not always line up: a structure built on
+// one machine and not on the other shifts every instance id after it.
+var _mb_b = buffer_create(32, buffer_grow, 1);
+buffer_write(_mb_b, buffer_u8, CoopCmd.MOB);
+buffer_write(_mb_b, buffer_u8, _kind);
+buffer_write(_mb_b, buffer_s32, floor(_x));
+buffer_write(_mb_b, buffer_s32, floor(_y));
+buffer_write(_mb_b, buffer_s32, _id);
+buffer_write(_mb_b, buffer_s32, _obj);
+CoopSend(_mb_b);
+
+#define CoopFindMob(_id, _x, _y)
+// -> the mob instance that matches, or -1.
+//
+// **By the instance id first**, because that is the identity; then **by the position**,
+// because the ids do not always line up (a structure built on one machine and not on the
+// other shifts every instance id after it).
+var _fm_obj = asset_get_index("parEnemy");
+if (_fm_obj < 0) _fm_obj = asset_get_index("objSlime");
+if (_fm_obj < 0) return -1;
+var _fm_n = instance_number(_fm_obj);
+for (var _fm_i = 0; _fm_i < _fm_n; _fm_i += 1) {
+    var _fm_inst = instance_find(_fm_obj, _fm_i);
+    if (!instance_exists(_fm_inst)) continue;
+    if (_id >= 0 && _fm_inst.id == _id) return _fm_inst;
+}
+for (var _fm_j = 0; _fm_j < _fm_n; _fm_j += 1) {
+    var _fm_hit = instance_find(_fm_obj, _fm_j);
+    if (!instance_exists(_fm_hit)) continue;
+    if (abs(_fm_hit.x - _x) < 24 && abs(_fm_hit.y - _y) < 24) return _fm_hit;
+}
+return -1;
+
+#define CoopApplyMob(_kind, _x, _y, _id, _obj)
+// The far end's answer to a mob appearing or dying.
+//
+// **A mob that appeared is adopted, not created**, whenever there is one already standing
+// there: both machines have the same island, so the client usually has a slime at that
+// spot already, and creating a second one would double every slime on the island.
+//
+// **A mob that died is destroyed** - and the destroy is done without the game's own
+// cleanup (`instance_destroy(i, false)`), because the game's death handling would drop
+// the mob's loot and announce it, and that loot is this side's business, not the peer's.
+var _am_hit = CoopFindMob(_id, _x, _y);
+if (_kind == 1) {
+    if (_am_hit >= 0) {
+        global.coopApplyingLoot = true;
+        instance_destroy(_am_hit, false);
+        global.coopApplyingLoot = false;
+        Trace("Co-op: removed the mob that died on the other side.");
+    } else {
+        Trace("Co-op: a mob died on the other side, and we have no such mob.");
+    }
+} else {
+    if (_am_hit >= 0) {
+        // Already there: the same mob, seen from two sides.
+        Trace("Co-op: the mob that appeared is already here - adopted.");
+    } else {
+        // A bad object index from the wire would take the game down, so it is checked.
+        if (_obj < 0) {
+            Trace("Co-op: the mob that appeared has no object - ignored.");
+        } else {
+            var _am_new = instance_create_depth(floor(_x), floor(_y),
+                                                CoopStructDepth(_y), _obj);
+            Trace("Co-op: created the mob that appeared on the other side: "
+                  + object_get_name(_obj) + " at " + string(floor(_x)) + "," + string(floor(_y)) + ".");
+        }
+    }
+}
+
 #define CoopSendLandSnapshot()
 // The world's land, cell by cell, so the client's world becomes the host's world.
 //
@@ -2331,6 +2407,16 @@ switch (_cmd) {
         if (_match < _tn) {
             Trace("Co-op: WARNING - our structure databases differ; the two installs are not the same build.");
         }
+        break;
+
+    case CoopCmd.MOB:
+        // A mob appeared or died on the other side (M3.5).
+        var _mb_kind = buffer_read(_buf, buffer_u8);
+        var _mb_x    = buffer_read(_buf, buffer_s32);
+        var _mb_y    = buffer_read(_buf, buffer_s32);
+        var _mb_id   = buffer_read(_buf, buffer_s32);
+        var _mb_obj  = buffer_read(_buf, buffer_s32);
+        CoopApplyMob(_mb_kind, _mb_x, _mb_y, _mb_id, _mb_obj);
         break;
 
     case CoopCmd.SNAP_LAND:

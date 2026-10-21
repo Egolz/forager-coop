@@ -1792,15 +1792,25 @@ for (var _pe_i = 0; _pe_i < array_length(_pe_names); _pe_i++) {
     array_push(_pe_lines, _pe_line);
 }
 
-// The arity of each spawn call, asked with **too few arguments**. The loader's message names
-// the parameter count it wants, and a short call cannot create anything.
-array_push(_pe_lines, "--- arity: each call below is deliberately short ---");
-array_push(_pe_lines, "calling ModEnemySpawn() with none");
-ModEnemySpawn();
-array_push(_pe_lines, "calling EnemyCreate() with none");
-EnemyCreate();
-array_push(_pe_lines, "calling ModObjectSpawn() with none");
-ModObjectSpawn();
+// **The arity question is asked offline now, not by calling** (2026-10-22). The bare calls that
+// stood here - `ModEnemySpawn(); EnemyCreate(); ModObjectSpawn();` - did exactly what they were
+// meant to (the loader answered with the exact count) and also did something they were NOT
+// meant to: **they stopped the mod from loading at all**:
+//
+//     Mod failed to unit! Forager Coop/Net.gml[L1799,c1] `ModEnemySpawn` takes 4 arguments, got 0
+//
+// Arity is checked at **compile time**, so a deliberately-short call is not a runtime no-op - it
+// is a compile failure, and the whole mod is dead. That is now recorded in the checker's
+// `BUILTIN_ARITIES` (and in the modding-API arity table beside it), so the next wrong call is
+// caught **offline** in a second instead of costing a compile round trip.
+//
+// What is known: **`ModEnemySpawn` takes 4 arguments.** What is NOT known is *which* four -
+// four is a count, not a signature - and that is what the remaining lines report and what the
+// next step has to answer without calling the function short.
+
+array_push(_pe_lines, "--- what the loader has already told us ---");
+array_push(_pe_lines, "`ModEnemySpawn` takes 4 arguments (live COMPILE, 2026-10-22)");
+array_push(_pe_lines, "the four are not yet identified - see BUILTIN_ARITIES in check_gml.py");
 
 for (var _pe_l = 0; _pe_l < array_length(_pe_lines); _pe_l++) {
     Trace(_pe_lines[_pe_l]);

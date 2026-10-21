@@ -129,6 +129,28 @@ BUILTIN_ARITIES = {
     # runs in this build: `PlaceLandfill(x, y)` and `RemoveLandfill(x, y)`.
     "PlaceLandfill": 2,
     "RemoveLandfill": 2,
+    # M3.5: the **modding API's** own functions. These are NOT engine builtins - they are the
+    # first-party API the loader injects - and their arities are checked at **compile time**,
+    # which is what makes a wrong call here fatal to the whole mod rather than a runtime no-op.
+    #
+    # Live COMPILE, 2026-10-22:
+    #   `ModEnemySpawn` takes 4 arguments, got 0
+    #       -> found by calling it bare from a probe, which was a mistake: the call did not
+    #          "safely do nothing", it stopped the mod loading ("Mod failed to unit!") and cost
+    #          a compile round trip. The count is recorded here so it cannot happen again.
+    #   The four arguments are **not yet identified** - a count is not a signature. Until they
+    #   are, any call to these below is checked for **the count alone**.
+    "ModEnemySpawn": 4,
+}
+
+# Modding-API functions whose **existence** is known but whose arity is not. A call to one of
+# these is a warning rather than an error: the name is real, the shape is unknown, and the only
+# way to learn the shape is the loader's own compile-time message... which is what the warning
+# exists to make rare, not to invite.
+MODDING_API_UNKNOWN_ARITY = {
+    "EnemyCreate", "EnemyGet", "EnemySetType", "EnemyEdit",
+    "ModObjectSpawn", "ModObjectSpawnPersistent", "ModNPCSpawn",
+    "ModStructureCreate", "ModZoneCreate", "CommandCreate",
 }
 
 NAMES = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
@@ -391,6 +413,17 @@ def check_calls(name: str, line: int, body: str, where: str, arities: dict[str, 
                                 f"defined with {want}")
             continue
         if fn in arities:
+            continue
+        if fn in MODDING_API_UNKNOWN_ARITY:
+            # The name is a real modding-API function (see the table) but its **arity is not
+            # recorded**, and this loader checks arity at compile time - so a wrong call is not
+            # a no-op, it is "Mod failed to unit!" and the whole mod is dead. Warn loudly: the
+            # only safe way to learn the shape is the loader's own message, and every one of
+            # those costs a compile round trip.
+            warns.append(f"{where}:{ln}: calls the modding API's {fn}() with an arity this "
+                         f"project has not recorded - a wrong count fails the whole COMPILE "
+                         f"(\"Mod failed to unit!\"); learn it, then add it to "
+                         f"BUILTIN_ARITIES")
             continue
         if fn in BUILTIN_ARITIES and m.end() <= len(body):
             want = BUILTIN_ARITIES[fn]

@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.70-m5f";
+global.coopVersion  = "0.0.71-m5g";
 global.coopProtocol = 9;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);

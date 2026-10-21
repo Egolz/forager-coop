@@ -42,6 +42,9 @@ IDLE_PERIOD_S = 0.5            # the owner's measurement: ~2 bobs a second
 IDLE_FRAMES = 6               # sprPlayerIdle's own frame count (live)
 TOO_FAST_CYCLE_S = 0.17       # image_speed 0.60 -> ~6/s, the owner: "too fast"
 TOO_SLOW_CYCLE_S = 0.67       # the wire index rise -> ~1.5/s, the owner: "too slow"
+CLAMPED_CYCLE_S = 5.0         # M5k5: the owner saw this - a 100 ms `_dt` ceiling over a ~1 s draw
+OLD_DT_CEILING_MS = 100       # the clamp that produced it
+NEW_DT_CEILING_MS = 1000      # the clamp that replaces it
 
 
 def units_per_ms(frames: int, period_s: float) -> float:
@@ -99,11 +102,31 @@ def main() -> int:
     if abs(other_cycle - IDLE_PERIOD_S) > 1e-9:
         failures.append("the period is not preserved when the frame count changes")
 
+    # 5. M5k5: the `_dt` ceiling must not be able to stretch a correct period into the observed one.
+    #    A ceiling of `c` ms applied to a draw arriving every `d` ms scales the animation by `c / d`,
+    #    so the reported bob of ~1 per 5 s against a 0.5 s period is a **clamp at a tenth**: a draw
+    #    every ~1000 ms, each counted as 100 ms.
+    def clamped_cycle(period_s: float, draw_interval_ms: float, ceiling_ms: float) -> float:
+        if draw_interval_ms <= 0:
+            return period_s
+        effective = min(draw_interval_ms, ceiling_ms) / draw_interval_ms
+        return period_s / effective if effective > 0 else float("inf")
+
+    observed = clamped_cycle(IDLE_PERIOD_S, 1000.0, OLD_DT_CEILING_MS)
+    print(f"a 1000 ms draw under the OLD {OLD_DT_CEILING_MS} ms ceiling -> "
+          f"{observed:.1f} s per bob (the owner saw {CLAMPED_CYCLE_S:.1f} s)")
+    if abs(observed - CLAMPED_CYCLE_S) > 0.01:
+        failures.append("the old ceiling does not reproduce the observed 5 s bob")
+    fixed = clamped_cycle(IDLE_PERIOD_S, 1000.0, NEW_DT_CEILING_MS)
+    print(f"the same draw under the NEW {NEW_DT_CEILING_MS} ms ceiling -> {fixed:.2f} s per bob")
+    if abs(fixed - IDLE_PERIOD_S) > 1e-9:
+        failures.append("the new ceiling still distorts an ordinary slow draw")
+
     if failures:
         for fl in failures:
             print("FAIL:", fl)
         return 1
-    print("idle bob: ok - sprite 0 is drawn and bobs every 0.5 s (~2/s), the owner's own number")
+    print("idle bob: ok - sprite 0 is drawn, the period is 0.5 s, and the _dt ceiling no longer eats it")
     return 0
 
 

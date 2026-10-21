@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.79-m5k4";
+global.coopVersion  = "0.0.80-m5k5";
 global.coopProtocol = 11;  // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -245,6 +245,15 @@ global.coopIdxUnitsStand  = 0;
 global.coopIdxStepsStand  = 0;
 global.coopIdxUnitsWalk   = 0;
 global.coopIdxStepsWalk   = 0;
+// M5k5: **how often the draw handler actually runs, and how much time it thinks passed.**
+// The owner's report - the puppet bobbing ~1 time in 5 s against a requested 2/s, a factor of 10 -
+// cannot be a tuning error, so it is a missing or extra factor. These count the handler's calls and
+// the sum of its `_dt` between probe dumps, which separates the two candidates: a handler that runs
+// rarely (few calls, honest `_dt`) from one that is being told too little time passed each call
+// (many calls, a `_dt` sum far below the wall clock, i.e. clamped by the 100 ms ceiling).
+global.coopDrawCount = 0;
+global.coopDrawMsSum = 0;
+global.coopLastDt    = 16;
 // Where the peer is actually drawn. The host decides, because the host is the side that
 // knows the world - a peer with no physics (the mock) reports a position inside a tree or in
 // the water, and the host pulls it onto ground a body could stand on.

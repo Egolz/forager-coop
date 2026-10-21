@@ -33,6 +33,13 @@
 // -1` and has no assets to send). The name comes from the handshake (`global.coopPeerName`,
 // M3.1) and falls back to "peer" until one arrives.
 
+// M5k5: count **every** draw, including the ones that exit below for their own reasons, because the
+// question is how often the handler runs at all. `coopDrawCount`/`coopDrawMsSum` are printed by the
+// idx probe and reset there. The sums use the *previous* draw's `_dt` (`coopLastDt`), because this
+// block runs before the exits and `_dt` is computed after them.
+global.coopDrawCount += 1;
+global.coopDrawMsSum += global.coopLastDt;
+
 if (!global.coopPeerAlive || !global.coopPeer.seen) exit;
 if (!instance_exists(objPlayer)) exit;
 if (objPlayer.room != global.coopPeer.room) exit;
@@ -126,7 +133,24 @@ var _now = current_time;
 var _dt = global.coopDrawAt > 0 ? (_now - global.coopDrawAt) : 16;
 global.coopDrawAt = _now;
 if (_dt < 1) _dt = 1;
-if (_dt > 100) _dt = 100;
+// **M5k5: the 100 ms ceiling was capping the *whole animation* at a tenth speed.**
+//
+// The owner asked for a bob every 0.5 s and got one every **5 s** - a factor of ten, which is not a
+// tuning error. This clamp is where a factor of ten comes from: it was added to stop a one-off spike
+// at world load throwing the puppet forward, and it silently does the same thing to a handler that is
+// called **rarely**. `OnDrawEnd` for a peer standing in the same room is not called at 60 Hz here; the
+// wire shows a probe every 180 steps arriving about every 13 s (~14 steps/s), and if a draw arrives
+// every ~1000 ms, this line turns each of those seconds into 100 ms - the animation clock then runs at
+// **a tenth** of wall-clock speed, and a 0.5 s bob takes 5 s. The comment above even names the cause
+// in passing ("the roll froze mid-turn" - it froze because the same clamp was eating its time).
+//
+// The clamp's *intent* - do not let one long frame fling the puppet - is kept, in the one place such a
+// spike can actually happen: a first draw after a pause has no previous timestamp to trust, and that
+// case is already `global.coopDrawAt <= 0` above. A long frame mid-session is real elapsed time.
+// Raising the ceiling to 1000 ms leaves the load spike clamped (its gap is seconds, not one second)
+// while letting an ordinary slow draw carry its true duration.
+if (_dt > 1000) _dt = 1000;
+global.coopLastDt = _dt;   // M5k5: the top-of-handler counter reads the *previous* draw's dt
 
 // **The puppet's own position, which walks toward the reported one.**
 //

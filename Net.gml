@@ -535,6 +535,13 @@ if (global.coopPeerAlive) {
                       ? (global.coopIdxUnitsStand / 100) / global.coopIdxStepsStand : -1;
         var _ip_walk  = global.coopIdxStepsWalk > 0
                       ? (global.coopIdxUnitsWalk / 100) / global.coopIdxStepsWalk : -1;
+        // **M5k5: the draw handler's own rate and its own idea of elapsed time.** The factor of ten
+        // (asked 2/s, seen 0.2/s) is either few calls or a clamped `_dt`, and these two numbers say
+        // which: `dwms` is the sum of `_dt` over `dw` draws, so `dwms / dw` is the average step the
+        // puppet's clock was advanced by, and comparing `dwms` with the real elapsed time between
+        // dumps says whether that clock is running at wall-clock speed.
+        var _ip_dpr = global.coopDrawCount > 0
+                    ? global.coopDrawMsSum / global.coopDrawCount : -1;
         var _ip_line = "idx probe: idx " + string(floor(_ip_idx))
                      + " d " + string(floor(_ip_di))
                      + " px " + string(floor(_ip_px))
@@ -545,7 +552,10 @@ if (global.coopPeerAlive) {
                      + " | stand " + string(floor(_ip_stand * 10000) / 10000) + " u/step over "
                      + string(global.coopIdxStepsStand) + " st"
                      + " | walk " + string(floor(_ip_walk * 10000) / 10000) + " u/step over "
-                     + string(global.coopIdxStepsWalk) + " st";
+                     + string(global.coopIdxStepsWalk) + " st"
+                     + " | draws " + string(global.coopDrawCount)
+                     + " ms " + string(floor(global.coopDrawMsSum))
+                     + " dt " + string(floor(_ip_dpr * 100) / 100);
         Trace(_ip_line);
         CoopSendDebugLine(_ip_line);
         global.coopIdxProbeIdx = _ip_idx;
@@ -555,6 +565,8 @@ if (global.coopPeerAlive) {
         global.coopIdxStepsStand = 0;
         global.coopIdxUnitsWalk  = 0;
         global.coopIdxStepsWalk  = 0;
+        global.coopDrawCount = 0;
+        global.coopDrawMsSum = 0;
     }
 }
 buffer_write(_b, buffer_u8, objPlayer.room);

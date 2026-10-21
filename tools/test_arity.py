@@ -39,9 +39,19 @@ def main() -> int:
     if "ModEnemySpawn" in out:
         failures.append("a correct ModEnemySpawn(1,2,3,4) was wrongly flagged:\n" + out)
 
-    out = run_case("EnemyCreate(1, 2);")
+    out = run_case("EnemyGet(1, 2);")
     if "arity this" not in out and "not recorded" not in out:
         failures.append("an unrecorded modding-API arity was not warned about:\n" + out)
+
+    # The same class of bug, one level down: an enum member the loader resolves at compile time.
+    # `EnemyType.Base` is recorded from the docs and must pass; `EnemyType.Slime` is invented.
+    out = run_case('EnemyCreate(undefined, "slime", EnemyType.Base);')
+    if "EnemyType.Base" in out:
+        failures.append("a documented EnemyType.Base was wrongly flagged:\n" + out)
+
+    out = run_case('EnemyCreate(undefined, "slime", EnemyType.Slime);')
+    if "EnemyType.Slime" not in out:
+        failures.append("an unrecorded enum member was not warned about:\n" + out)
 
     if failures:
         for f in failures:

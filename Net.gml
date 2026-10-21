@@ -1756,33 +1756,39 @@ if (global.coopSocket < 0) {
 }
 
 #define CoopProbeEnemy()
-// F1. **What is the modding API's own way to spawn an enemy, and what does it want?**
+// F1 (and automatic, once per world). **Spawn a slime, using the modding API's own path.**
 //
-// The owner asked for a slime, and that is a **spawn**, not a search - so this is the question
-// the whole M3.5 effort should have started from. The build has a *first-party* spawn API: its
-// symbol table names `ModEnemySpawn`, `EnemyCreate`, `EnemyGet`, `EnemySetType`,
-// `ModObjectSpawn` and `objSlime` itself. None of their signatures are recorded in this repo,
-// and guessing a signature is exactly the mistake that has cost several rounds already.
+// The owner asked for a slime; the effort had gone into *finding* one instead. The first-party
+// spawn API is in the build and its signatures are in the **official docs** - guessed at first,
+// which cost a compile ("Mod failed to unit! `ModEnemySpawn` takes 4 arguments, got 0"), and then
+// read properly from:
 //
-// So the probe **asks the loader**. Its arity errors are exact and cheap to read - that is how
-// `sprite_get_yoffset`'s one-argument shape was learned in this build - and a call made with
-// the **wrong number of arguments cannot spawn anything**, which is what makes this safe to
-// run in a live world.
+//     https://topheranselmo.com/forager-modding-docs/Systems/EnemyDatabase/README.md
 //
-// It also reports what the slime-related names **resolve** to. `asset_get_index` answers an
-// unknown name with **0**, and 0 is a real object, so "did it resolve" is asked as `> 0` and
-// printed with the name beside the number.
+// which gives both halves of the path and the exact shapes:
+//
+//     EnemyBeet = EnemyCreate(undefined, "beet", EnemyType.Raider);
+//     var _inst = ModEnemySpawn(x, y, depth, EnemyBeet);
+//
+// So: `EnemyCreate(undefined, name, type)` makes a **database entry** and returns its id, and
+// `ModEnemySpawn(x, y, depth, enemy)` puts an instance of it in the world. Four arguments, as
+// the loader said. `EnemyType.Base` is the type with no behaviour of its own (the docs: only
+// `Raider` has supplied behaviour), so the slime is created Base and left to the game's own
+// slime behaviour if the database entry maps to `objSlime`.
+//
+// The probe reports every step, so the next run says where it worked or where it stopped rather
+// than only "no slime". The enemy id is cached in a global so the same entry is reused.
 var _pe_lines = [];
-array_push(_pe_lines, "=== enemy api probe begin " + global.coopVersion + " ===");
+array_push(_pe_lines, "=== slime probe begin " + global.coopVersion + " ===");
 
 if (!instance_exists(objPlayer)) {
     Trace("Co-op: F1 needs a loaded world.");
     exit;
 }
 
-var _pe_names = ["objSlime", "objSlimeKing", "parEnemy", "objModEnemy", "objSummonSkeleton",
-                 "objSlimePortal"];
-array_push(_pe_lines, "player room " + string(objPlayer.room));
+// What the object names resolve to. `asset_get_index` answers an unknown name with **0**, and 0
+// is a real object, so "did it resolve" is asked as `> 0` and printed with the name beside it.
+var _pe_names = ["objSlime", "objSlimeKing", "parEnemy", "objModEnemy"];
 for (var _pe_i = 0; _pe_i < array_length(_pe_names); _pe_i++) {
     var _pe_nm = _pe_names[_pe_i];
     var _pe_idx = asset_get_index(_pe_nm);
@@ -1792,31 +1798,47 @@ for (var _pe_i = 0; _pe_i < array_length(_pe_names); _pe_i++) {
     array_push(_pe_lines, _pe_line);
 }
 
-// **The arity question is asked offline now, not by calling** (2026-10-22). The bare calls that
-// stood here - `ModEnemySpawn(); EnemyCreate(); ModObjectSpawn();` - did exactly what they were
-// meant to (the loader answered with the exact count) and also did something they were NOT
-// meant to: **they stopped the mod from loading at all**:
-//
-//     Mod failed to unit! Forager Coop/Net.gml[L1799,c1] `ModEnemySpawn` takes 4 arguments, got 0
-//
-// Arity is checked at **compile time**, so a deliberately-short call is not a runtime no-op - it
-// is a compile failure, and the whole mod is dead. That is now recorded in the checker's
-// `BUILTIN_ARITIES` (and in the modding-API arity table beside it), so the next wrong call is
-// caught **offline** in a second instead of costing a compile round trip.
-//
-// What is known: **`ModEnemySpawn` takes 4 arguments.** What is NOT known is *which* four -
-// four is a count, not a signature - and that is what the remaining lines report and what the
-// next step has to answer without calling the function short.
+// **Where to put it: one cell to the player's right, on the player's own row**, which is ground
+// the player is standing on, so it is never water and never inside a wall. `depth` is the
+// player's own depth so the slime sorts with the player rather than behind the terrain.
+var _pe_x = objPlayer.x + 16;
+var _pe_y = objPlayer.y;
+var _pe_dp = objPlayer.depth;
 
-array_push(_pe_lines, "--- what the loader has already told us ---");
-array_push(_pe_lines, "`ModEnemySpawn` takes 4 arguments (live COMPILE, 2026-10-22)");
-array_push(_pe_lines, "the four are not yet identified - see BUILTIN_ARITIES in check_gml.py");
+// The database entry, made once and remembered. `EnemyType.Base` = no built-in behaviour.
+if (global.coopSlimeEnemy <= 0) {
+    global.coopSlimeEnemy = EnemyCreate(undefined, "slime", EnemyType.Base);
+    array_push(_pe_lines, "EnemyCreate(undefined,\"slime\",EnemyType.Base) -> "
+               + string(global.coopSlimeEnemy));
+} else {
+    array_push(_pe_lines, "reusing the slime entry " + string(global.coopSlimeEnemy));
+}
+
+if (global.coopSlimeEnemy <= 0) {
+    array_push(_pe_lines, "the database entry did not come back - stopping before the spawn");
+} else {
+    var _pe_inst = ModEnemySpawn(_pe_x, _pe_y, _pe_dp, global.coopSlimeEnemy);
+    array_push(_pe_lines, "ModEnemySpawn(" + string(_pe_x) + "," + string(_pe_y) + ","
+               + string(_pe_dp) + "," + string(global.coopSlimeEnemy) + ") -> " + string(_pe_inst));
+    if (typeof(_pe_inst) == "number" && _pe_inst > 0 && instance_exists(_pe_inst)) {
+        array_push(_pe_lines, "spawned obj '" + object_get_name(_pe_inst.object_index)
+                   + "' at " + string(floor(_pe_inst.x)) + "," + string(floor(_pe_inst.y)));
+        // Tell the peer, so the slime shows on both machines. The mob packet already exists -
+        // `CoopSendMob(kind, x, y, id, obj)`, kind 0 = appeared - and this is what finally gives
+        // it something real to carry instead of a census's guess.
+        CoopSendMob(0, _pe_inst.x, _pe_inst.y, _pe_inst.id, _pe_inst.object_index);
+        array_push(_pe_lines, "announced the slime to the peer");
+    } else {
+        array_push(_pe_lines, "the spawn returned " + string(_pe_inst)
+                   + " - not a live instance");
+    }
+}
 
 for (var _pe_l = 0; _pe_l < array_length(_pe_lines); _pe_l++) {
     Trace(_pe_lines[_pe_l]);
     CoopSendDebugLine(_pe_lines[_pe_l]);
 }
-Trace("=== enemy api probe end ===");
+Trace("=== slime probe end ===");
 
 #define CoopProbeApi()
 // F11. Can a mod ask the game where water is? This is the question the M2.1 test

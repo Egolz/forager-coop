@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.71-m5g";
+global.coopVersion  = "0.0.72-m5h";
 global.coopProtocol = 9;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -171,6 +171,8 @@ global.coopDustTimer = 0;      // drawn frames until the next sub-image
 // Has the enemy-API probe run in this world? It fires itself once the peer is up, so its
 // answer is in the mock's log without anyone pressing a key.
 global.coopEnemyProbed = false;
+// The slime's enemy-database id, made once by `EnemyCreate` and reused (see CoopProbeEnemy).
+global.coopSlimeEnemy = -1;
 // M3.4: the puppet's **drawn** position, which walks toward the reported one.
 //
 // The positions arrive twenty times a second and the game draws sixty times a second, so

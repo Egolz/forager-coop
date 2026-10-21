@@ -129,29 +129,102 @@ BUILTIN_ARITIES = {
     # runs in this build: `PlaceLandfill(x, y)` and `RemoveLandfill(x, y)`.
     "PlaceLandfill": 2,
     "RemoveLandfill": 2,
-    # M3.5: the **modding API's** own functions. These are NOT engine builtins - they are the
-    # first-party API the loader injects - and their arities are checked at **compile time**,
-    # which is what makes a wrong call here fatal to the whole mod rather than a runtime no-op.
+    # **The modding API's own functions - arities from the OFFICIAL docs, not from guessing.**
+    # These are not engine builtins; they are the first-party API the loader injects, and arity
+    # is checked at **compile time**, so a wrong call is fatal to the whole mod
+    # ("Mod failed to unit!"), not a runtime no-op. That is exactly what happened in M5f.
     #
-    # Live COMPILE, 2026-10-22:
-    #   `ModEnemySpawn` takes 4 arguments, got 0
-    #       -> found by calling it bare from a probe, which was a mistake: the call did not
-    #          "safely do nothing", it stopped the mod loading ("Mod failed to unit!") and cost
-    #          a compile round trip. The count is recorded here so it cannot happen again.
-    #   The four arguments are **not yet identified** - a count is not a signature. Until they
-    #   are, any call to these below is checked for **the count alone**.
+    # Live COMPILE, 2026-10-22:  `ModEnemySpawn` takes 4 arguments, got 0
+    # Docs mirror (topheranselmo.com/forager-modding-docs, the same source the notes cite):
+    #   ModObjectSpawn(x, y, depth)                          -> instance id
+    #   ModObjectSpawnPersistent(x, y, depth)                -> instance id
+    #   ModNPCSpawn(x, y, depth, npc)                        -> instance id
+    #   ModEnemySpawn(x, y, depth, enemy)                    -> instance id
+    #   EnemyCreate(undefined, name, type)                   -> enemy id
+    #   EnemyEdit(enemy, EnemyData.Field, value)
+    #   ScriptWrap(id)                                       -> ScriptWrapper
+    #   ScriptCall(wrapper)                                  -> (one argument, live-confirmed)
+    #   InstanceAssignMethod(id, event, method, [runDefault])
+    #   InstanceAddVariable(id, ...variables)
+    #   InstanceRemoveVariable(id, ...variables)
+    #   ModFind(id) / ModIsOnline(modDataPoint)
+    #   ModFunctionGet(id, functionName) / ModGlobalGet(id, globalName)
+    #   CommandCreate(commandName, cheat, script, [...arg])
+    "ModObjectSpawn": 3,
+    "ModObjectSpawnPersistent": 3,
+    "ModNPCSpawn": 4,
     "ModEnemySpawn": 4,
+    "EnemyCreate": 3,
+    "EnemyEdit": 3,
+    "ScriptWrap": 1,
+    "ScriptCall": 1,
+    "ModFind": 1,
+    "ModIsOnline": 1,
+    "ModFunctionGet": 2,
+    "ModGlobalGet": 2,
 }
 
-# Modding-API functions whose **existence** is known but whose arity is not. A call to one of
-# these is a warning rather than an error: the name is real, the shape is unknown, and the only
-# way to learn the shape is the loader's own compile-time message... which is what the warning
-# exists to make rare, not to invite.
+# Modding-API functions whose **existence** is known and whose arity the docs do NOT state.
+# A call to one of these warns: the name is real, the shape is unknown, and the loader checks
+# arity at compile time - so learning it by calling costs a whole compile round trip and takes
+# the mod down. Learn it from the docs or from a known-good mod instead.
 MODDING_API_UNKNOWN_ARITY = {
-    "EnemyCreate", "EnemyGet", "EnemySetType", "EnemyEdit",
-    "ModObjectSpawn", "ModObjectSpawnPersistent", "ModNPCSpawn",
-    "ModStructureCreate", "ModZoneCreate", "CommandCreate",
+    "EnemyGet", "EnemySetType",
+    "ModStructureCreate", "ModZoneCreate",
+    "InstanceAssignMethod", "InstanceAddVariable", "InstanceRemoveVariable",
+    "CommandCreate",
 }
+
+# **Enums the loader injects into mod GML** - and their members, kept to what is *proven* rather
+# than what is plausible. The docs (`Native/Enums/README.md`) say Forager's enums "are exposed to
+# the modding API ... used the same way they would be used in standard GML", and the reference mod
+# that runs in this build proves the dotted-member form with `Item.Coin`, `Item.Count`,
+# `StructureType.Base` and `BuildMenuCategory.Economic`.
+#
+# The loader checks *enum member names* at compile time too, so a typo here is another "Mod failed
+# to unit!" - the same class as the arity bug, one level down. Members listed as `None` are ones
+# this project has not needed yet.
+KNOWN_ENUMS = {
+    # Proved in this build by the reference mod (PencilPal) and by our own F3 probe.
+    "Item": {"Wood", "Stone", "Coin", "Count", "Coal", "Crystal", "Topaz", "Emerald",
+             "Ruby", "Amethyst", "RoyalSteel", "RoyalClothing", "Key", "Cookies"},
+    "StructureType": {"Base"},
+    "BuildMenuCategory": {"Economic"},
+    # **`EnemyType` from the official docs, verbatim**: the Enemy Database page uses
+    # `EnemyType.Raider` and `EnemyType.Base`, and says Raider is "currently the only enemy
+    # type with supplied behavior" while Base has none.
+    "EnemyType": {"Base", "Raider"},
+    # `EnemyData` members are read via `EnemyEdit(enemy, EnemyData.Field, value)`; the docs' one
+    # example is `EnemyData.Damage`. Only that is recorded - do not invent the rest.
+    "EnemyData": {"Damage"},
+}
+
+ENUM_MEMBER = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b")
+
+
+def check_enum_members(where: str, text: str, warns: list[str]) -> None:
+    """A dotted enum member whose enum we know, but whose member we do not.
+
+    The loader resolves `Enum.Member` at compile time, so a wrong member is a compile failure
+    (see the `ModEnemySpawn` arity note above) - not a runtime surprise. Where the enum is one of
+    `KNOWN_ENUMS` and the member is not listed, warn: this project has not proved that member and
+    the only way to find out is a compile round trip.
+    """
+    seen: set[tuple[str, str]] = set()
+    for ln, line in enumerate(text.splitlines(), 1):
+        for m in ENUM_MEMBER.finditer(line):
+            enum_name, member = m.group(1), m.group(2)
+            if enum_name not in KNOWN_ENUMS:
+                continue
+            key = (enum_name, member)
+            if member in KNOWN_ENUMS[enum_name] or key in seen:
+                continue
+            seen.add(key)
+            warns.append(f"{where}:{ln}: `{enum_name}.{member}` - the member `{member}` is not "
+                         f"recorded for the enum `{enum_name}`; the loader resolves enum members "
+                         f"at COMPILE time, so a wrong one is \"Mod failed to unit!\". Check the "
+                         f"docs (Native/Enums) or a working mod, then add it to KNOWN_ENUMS")
+
 
 NAMES = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 DEFINE = re.compile(r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)"
@@ -510,6 +583,7 @@ def main(argv: list[str] | None = None) -> int:
         check_forbidden(str(where), text, problems)
         check_string_math(str(where), text, problems)
         check_key_constants(str(where), text, problems)
+        check_enum_members(str(where), text, warns)
         blocks = find_defines(text)
         if not blocks:
             problems.append(f"{where}: no #define found")

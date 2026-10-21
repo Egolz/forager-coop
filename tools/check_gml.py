@@ -110,6 +110,10 @@ BUILTIN_ARITIES = {
     "draw_text_ext": 5,
     "draw_text_ext_transformed_color": 13,
     "draw_text_transformed_color": 11,
+    # M3.1: the game's own land functions. The arity is the reference mod's call, which
+    # runs in this build: `PlaceLandfill(x, y)` and `RemoveLandfill(x, y)`.
+    "PlaceLandfill": 2,
+    "RemoveLandfill": 2,
 }
 
 NAMES = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")

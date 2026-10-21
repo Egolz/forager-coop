@@ -63,8 +63,8 @@ import sys
 import tempfile
 import time
 
-PROTOCOL = 5
-VERSION = "mockpeer-5"
+PROTOCOL = 6
+VERSION = "mockpeer-6"
 # The name the mock presents to the host (M3.1). ASCII on purpose: the host draws it with the
 # game's own font, and a non-ASCII name is exactly the kind of thing that renders as boxes if
 # the font lacks the glyphs.
@@ -84,6 +84,7 @@ INTENT_PLACE, MUTATION_PLACE, INTENT_REJECTED, STRUCTURE_TABLE = 8, 9, 10, 11
 DEBUG_LINE = 12
 ITEM_TABLE = 13
 DROP, PICKUP, RESOURCE_DESTROY = 14, 15, 16
+SNAP_LAND = 17
 
 NAMES = {
     HELLO: "HELLO", WELCOME: "WELCOME", REJECT: "REJECT",
@@ -92,6 +93,7 @@ NAMES = {
     INTENT_REJECTED: "INTENT_REJECTED", STRUCTURE_TABLE: "STRUCTURE_TABLE",
     DEBUG_LINE: "DEBUG_LINE", ITEM_TABLE: "ITEM_TABLE",
     DROP: "DROP", PICKUP: "PICKUP", RESOURCE_DESTROY: "RESOURCE_DESTROY",
+    SNAP_LAND: "SNAP_LAND",
 }
 
 # structures to try to build if we are not told which one (first match wins)
@@ -213,6 +215,23 @@ def resource_destroy(room: int, x: int, y: int, obj: int) -> bytes:
 
 def bye(reason: str) -> bytes:
     return bytes([BYE]) + p_str(reason)
+
+
+def snap_land(room: int, gen: int, flags: int, cells: list[tuple[int, int]]) -> bytes:
+    """A chunk of the world's land cells (packet 17, M3.1).
+
+    The host walks the world's 16 px grid and sends every cell that is land. The cells go
+    out in chunks because a packet per cell is what made the reference mod's land sync
+    "very slow on big worlds"; a chunk with **no cells** is the end of the snapshot.
+
+    `flags` bit 0 means "the client should also drop the land it has and the host does not"
+    - the part that makes the client's island become the host's island. A peer without a
+    world must not set it: it would take the island away for good.
+    """
+    out = bytes([SNAP_LAND]) + struct.pack("<BBBH", room, gen, flags, len(cells))
+    for x, y in cells:
+        out += struct.pack("<HH", x, y)
+    return out
 
 
 # --- packet parsing --------------------------------------------------------
@@ -353,6 +372,21 @@ def parse_one(buf: bytes):
         (obj,) = struct.unpack("<H", buf[10:12])
         return {"cmd": cmd, "name": NAMES[cmd], "room": room, "x": x, "y": y,
                 "object": obj}, 12
+    if cmd == SNAP_LAND:
+        if len(buf) < 5:
+            return None, 0
+        room, gen, flags = struct.unpack("<BBB", buf[1:4])
+        (count,) = struct.unpack("<H", buf[4:6])
+        i = 6
+        cells = []
+        for _ in range(count):
+            if i + 4 > len(buf):
+                return None, 0
+            x, y = struct.unpack("<HH", buf[i:i + 4])
+            i += 4
+            cells.append((x, y))
+        return {"cmd": cmd, "name": NAMES[cmd], "room": room, "gen": gen,
+                "flags": flags, "cells": cells}, i
     if cmd == DEBUG_LINE:
         s = _read_str(buf, 1)
         if s is None:
@@ -393,6 +427,13 @@ def describe(pkt: dict) -> str:
     if name == "RESOURCE_DESTROY":
         return (f"RESOURCE_DESTROY obj#{pkt['object']} at {pkt['x']},{pkt['y']} "
                 f"room {pkt['room']}")
+    if name == "SNAP_LAND":
+        _n = len(pkt["cells"])
+        _first = pkt["cells"][0] if _n else None
+        _last = pkt["cells"][-1] if _n else None
+        return (f"SNAP_LAND room={pkt['room']} gen={pkt['gen']} flags={pkt['flags']} "
+                f"cells={_n}"
+                + (f" first={_first[0]},{_first[1]} last={_last[0]},{_last[1]}" if _n else ""))
     if name == "DEBUG_LINE":
         return f"DEBUG {pkt['text']}"
     return f"{name} reason={pkt.get('reason')!r}"
@@ -428,6 +469,15 @@ class Peer:
         self.seq = 0
         self.last_place_name = ""   # the name the client last built with
         self._last_host_pos = 0.0
+        # M3.1: the world's land. The host sends it; the mock counts what arrives so a
+        # run can say how big the world's land set is. `land_sent` is the host's side:
+        # the mock has no world, so it can only send the one cell it knows is land -
+        # the one under the player - and it does so with the "remove" flag **off**, so
+        # a fake land set can never take the client's island away.
+        self.land_cells = 0
+        self.land_gen = -1
+        self.land_sent = False
+        self.land_on_hello = False
         self.host_spot: tuple[int, int] | None = None   # where the host stands
         # The scripted loot is **destructive in a live world** - a drop at a fixed tile makes
         # the game spawn a pickup inside whatever stands there, and the tree it was in goes.
@@ -614,6 +664,18 @@ class Peer:
                 self.send(resource_destroy(8, 512, 640, 5))
                 log("-> RESOURCE_DESTROY obj#5 at 512,640")
             self.handshaken = True
+        elif name == "SNAP_LAND":
+            # The host's world (M3.1). The mock has no world, so this is either the
+            # game's real land set - which is the point of the packet - or the one
+            # cell the mock knows is land under the player.
+            self.land_cells += len(pkt["cells"])
+            self.land_gen = pkt["gen"]
+            if not pkt["cells"]:
+                log(f"   land snapshot done: {self.land_cells} cells, gen {self.land_gen}, "
+                    f"flags {pkt['flags']}")
+            else:
+                log(f"   land chunk: {len(pkt['cells'])} cells, gen {pkt['gen']}, "
+                    f"flags {pkt['flags']}")
         elif name == "WELCOME" and not self.is_host:
             if pkt["protocol"] != PROTOCOL:
                 log("!! host protocol mismatch")
@@ -787,6 +849,18 @@ class Peer:
         self.host_spot = (px, py)
         hx, hy = self.host_spot
         self.send(pos(hx, hy, angle=0, facing=1, sprite=-1, image=0, room=self.room))
+        # M3.1: the world snapshot. The mock has no world, so it sends the one cell it
+        # knows is land - the cell under the player - with the "remove what the host
+        # does not have" flag **off**. A fake land set must never be able to take the
+        # client's island away; the real host sends the whole set with the flag on.
+        if self.land_on_hello and not self.land_sent and self.player is not None:
+            self.land_sent = True
+            _cx = int(px // 16) * 16 + 8
+            _cy = int(py // 16) * 16 + 8
+            self.send(snap_land(self.room, 1, 0, [(_cx, _cy)]))
+            log(f"-> SNAP_LAND 1 cell at {_cx},{_cy} (the cell under the player)")
+            self.send(snap_land(self.room, 1, 0, []))
+            log("-> SNAP_LAND end of snapshot")
 
     def choose_structure(self) -> str | None:
         if self.place_wanted:
@@ -975,7 +1049,9 @@ def run_selftest() -> int:
     drp = drop(8, 640, 704, 0, 3)
     pik = pickup(8, 640, 704, 0)
     rds = resource_destroy(8, 512, 640, 5)
-    for payload, name, checks in [
+    lnd = snap_land(8, 3, 1, [(8, 8), (24, 8), (8, 24)])
+    lnd_end = snap_land(8, 3, 1, [])
+    extra_cases = [
         (mut, "MUTATION_PLACE", {"seq": 12, "intentId": 9, "x": 640, "y": 704,
                                  "depth": -10, "structure": "forge"}),
         (tbl, "STRUCTURE_TABLE", {"entries": [(0, "land"), (1, "forge")]}),
@@ -985,7 +1061,11 @@ def run_selftest() -> int:
         (drp, "DROP", {"room": 8, "x": 640, "y": 704, "item": 0, "stack": 3}),
         (pik, "PICKUP", {"room": 8, "x": 640, "y": 704, "item": 0}),
         (rds, "RESOURCE_DESTROY", {"room": 8, "x": 512, "y": 640, "object": 5}),
-    ]:
+        (lnd, "SNAP_LAND", {"room": 8, "gen": 3, "flags": 1,
+                            "cells": [(8, 8), (24, 8), (8, 24)]}),
+        (lnd_end, "SNAP_LAND", {"room": 8, "gen": 3, "flags": 1, "cells": []}),
+    ]
+    for payload, name, checks in extra_cases:
         try:
             pkt, used = parse_one(payload)
         except Exception as exc:                      # noqa: BLE001
@@ -1076,7 +1156,7 @@ def run_selftest() -> int:
         for f in failures:
             log(f"FAIL {f}")
         return 1
-    log(f"selftest: {len(cases) + 8} packets encode/parse correctly, spot-retry ok")
+    log(f"selftest: {len(cases) + len(extra_cases)} packets encode/parse correctly, spot-retry ok")
     return 0
 
 
@@ -1196,7 +1276,8 @@ def _drain(s: socket.socket, seconds: float) -> bytes:
     return data
 
 
-def run_server(port: int, loot: bool = False, echo: bool = False) -> None:
+def run_server(port: int, loot: bool = False, echo: bool = False,
+               land: bool = False) -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # The port may still be held by a game that is hosting and has not let go of it yet, so
@@ -1223,6 +1304,7 @@ def run_server(port: int, loot: bool = False, echo: bool = False) -> None:
         peer = Peer(conn, is_host=True)
         peer.loot_on_hello = loot
         peer.echo_structure = echo
+        peer.land_on_hello = land
         try:
             while True:
                 peer.pump()
@@ -1264,6 +1346,11 @@ def main() -> int:
                     help="server mode: answer a placement with a second structure the client "
                          "did not ask for - the visible proof that the host drives the "
                          "client's world. Off by default: it is a demonstration, not a test")
+    ap.add_argument("--land", action="store_true",
+                    help="server mode: send the world snapshot (packet 17). The mock has no "
+                         "world, so it sends the one cell it knows is land - the cell under "
+                         "the player - with the 'remove the land the host does not have' flag "
+                         "off, so a fake land set can never take the client's island away")
     args = ap.parse_args()
     place = "" if args.no_place else args.place
     try:
@@ -1275,7 +1362,7 @@ def main() -> int:
         elif args.mode == "probe":
             run_probe(args.host, args.port, settle=4.0)
         else:
-            run_server(args.port, loot=args.loot, echo=args.echo)
+            run_server(args.port, loot=args.loot, echo=args.echo, land=args.land)
     except KeyboardInterrupt:
         log("bye")
     return 0

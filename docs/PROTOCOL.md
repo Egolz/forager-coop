@@ -69,6 +69,36 @@ with a confirmed mutation. See the model in the hub's `games/forager/DESIGN.md`.
 | 14 | `DROP` | either way | `u8 room`, `s32 x`, `s32 y`, `u16 item`, `u16 stack` |
 | 15 | `PICKUP` | either way | `u8 room`, `s32 x`, `s32 y`, `u16 item` |
 | 16 | `RESOURCE_DESTROY` | either way | `u8 room`, `s32 x`, `s32 y`, `u16 objectIndex` |
+| 17 | `SNAP_LAND` | host → client | `u8 room`, `u8 gen`, `u8 flags`, `u16 count`, `{ u16 x, u16 y } × count` |
+
+### The world snapshot (M3.1)
+
+`SNAP_LAND` carries the world's **land**: the cells that are ground rather than water. It is
+the first half of the snapshot, and the half that makes the two worlds the same world —
+until the client has the host's land, every spot the host builds on may be water on the
+client's side, which is why the client had to move a structure to a free cell and why the
+two sides could never agree on where a building stands.
+
+| field | meaning |
+|---|---|
+| `room` | the room the land belongs to (`objPlayer.room`; room 8 is the main world) |
+| `gen` | the snapshot's **generation**. A chunk whose generation differs from the one the client has starts a new snapshot, and the client clears its picture of the host's land before the new cells go in |
+| `flags` | bit 0 = "the client should also **remove** the land it has and the host does not". It is what makes the client's island *become* the host's island instead of the two growing into each other. A peer without a world must not set it — a fake land set would take the island away for good, and the flag is the only thing standing between that and a broken save |
+| `count` | how many cells follow. **A chunk with `count` 0 is the end of the snapshot**, and the client runs its clean-up pass when it sees it |
+| `x`, `y` | the cell's **centre**, on the world's 16 px lattice (8, 24, … 1336). The grid is 84 × 84 = 7056 cells, and the world is 1344 px across |
+
+The cells go out in chunks of at most 512 (a 2 KB packet) because a packet per cell is what
+made the reference mod's land sync "very slow on big worlds" — its own TODO. The reference
+implementation (PencilPal, the one mod known to run in this build) walks the same grid and
+sends one `LAND` packet per cell; the two function names this packet needs,
+`PlaceLandfill(x, y)` and `RemoveLandfill(x, y)`, are the game's own, and they are called in
+the same `with(objPlayer)` context the reference mod uses, because that is the context the
+game's function expects.
+
+The client's side of the apply: a cell the host has and the client has not becomes land; a
+cell the client has and the host does not is removed (only when the flag says so). The
+snapshot can take the ground out from under the player, so the player is put back on the
+nearest land afterwards.
 
 Packets 14-16 are M2.2 (resources and loot). The direction is "either way" because
 either machine can be the one that saw the change; the **host** is the one that
@@ -155,9 +185,10 @@ Notes:
 Notes:
 
 - **Version check.** The host refuses a peer whose `protocol` differs (it replies `REJECT`
-  and drops the socket). Protocol `5`, mod version `0.0.34-m3a` at the time of writing.
-  (`5` adds the player name to `HELLO`/`WELCOME`; `4` added the M2.2 loot packets; `3` added
-  `DEBUG_LINE`; `2` added the world-sync packets; `1` was presence only.) The number moves when
+  and drops the socket). Protocol `6`, mod version `0.0.53-m3s` at the time of writing.
+  (`6` adds `SNAP_LAND`, the world snapshot; `5` added the player name to `HELLO`/`WELCOME`;
+  `4` added the M2.2 loot packets; `3` added `DEBUG_LINE`; `2` added the world-sync
+  packets; `1` was presence only.) The number moves when
   the **wire format** moves, not when a feature is added: `5` grew a `string name` field into
   two packets, and a peer still speaking `4` would read that name as the tail of the version
   string and then read whatever followed it.
@@ -175,9 +206,10 @@ Notes:
 
 Still missing from the world sync:
 
-- `SNAPSHOT` (host → client, chunked, with checksums): world state on join and resync.
-  Without it the two players start from whatever each one loaded, so M2.1 is only correct
-  when both are looking at the same world.
+- `SNAPSHOT` (host → client, chunked, with checksums): the rest of the world state on join
+  and resync. `SNAP_LAND` is the **land** half of it and landed first, because it is the half
+  everything else stands on: the structures and the resources cannot be placed correctly
+  until both sides agree on where the ground is.
 - Terrain (tile break/place) and resource pickups: no event exists for the former, so the
   host has to detect changes itself.
 - Item counts and inventory deltas.

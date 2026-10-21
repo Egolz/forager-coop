@@ -38,14 +38,17 @@ enum CoopCmd {
     ITEM_TABLE       = 13,  // host -> client: the item id/name list
     DROP             = 14,  // either way: an item appeared in the world
     PICKUP           = 15,  // either way: an item left the world (picked up)
-    RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
+    RESOURCE_DESTROY = 16,  // either way: a resource (tree/rock/...) was harvested
+    // --- M3.1: the world snapshot ---
+    SNAP_LAND        = 17   // host -> client: a chunk of the world's land cells
 }
 
-global.coopVersion  = "0.0.52-m3r";
-global.coopProtocol = 5;   // 1 = presence only (M1); 2 adds the world-sync packets;
+global.coopVersion  = "0.0.53-m3s";
+global.coopProtocol = 6;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
-                           // 5 adds the player name to HELLO/WELCOME (M3.1)
+                           // 5 adds the player name to HELLO/WELCOME (M3.1);
+                           // 6 adds SNAP_LAND, the world snapshot (M3.1)
                            //
                            // The number moves when the **wire format** moves, not when a
                            // feature is added. 5 was free again after a rejected CMD
@@ -54,6 +57,11 @@ global.coopProtocol = 5;   // 1 = presence only (M1); 2 adds the world-sync pack
                            // name as the end of the version string and then read garbage
                            // after it. A protocol number that survives a format change is
                            // how a field-order bug survives a review.
+                           //
+                           // 6 is the same kind of move: SNAP_LAND is a new packet, and a
+                           // peer that does not know it would silently receive no land at
+                           // all - a client whose island never becomes the host's island,
+                           // with no error anywhere. Better to refuse the join.
 global.coopPort     = 6511;
 global.coopPlaceRange = 448;   // see Net.gml: how far a client may place from itself
 global.coopSolidRadius = 16;   // see Net.gml: how close counts as the same build-cell
@@ -128,6 +136,15 @@ global.coopBodyTried = false;
 global.coopStandX   = 0;
 global.coopStandY   = 0;
 global.coopStandKey = "";
+// M3.1: the world snapshot. The host sends its land cells in chunks; the client keeps the
+// host's set as a **grid bitmap** (one entry per 16 px cell, 84 x 84 = 7056 of them) so the
+// question "is this cell the host's land?" is an array read and not a walk of the list.
+// `coopLandGen` is the snapshot's generation: a chunk whose generation differs from the
+// one we have starts a new snapshot and clears the bitmap.
+global.coopLandGen   = -1;
+global.coopHostLand  = [];
+global.coopLandAdded = 0;
+global.coopLandRemoved = 0;
 
 
 // Bush / pickable-plant sync state (see Events/OnStep.gml, "bush sync"). A bush is not a

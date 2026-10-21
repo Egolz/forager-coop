@@ -24,7 +24,7 @@ python -u tools/coop_mockpeer.py selftest
 if ($LASTEXITCODE -ne 0) { Write-Host "selftest FAILED"; exit 1 }
 
 $srv = Start-Process -FilePath "python" `
-    -ArgumentList "-u", "tools/coop_mockpeer.py", "server", "--port", "$port", "--loot", "--echo" `
+    -ArgumentList "-u", "tools/coop_mockpeer.py", "server", "--port", "$port", "--loot", "--echo", "--land" `
     -RedirectStandardOutput $srvLog -RedirectStandardError "$log/server.err" `
     -PassThru -NoNewWindow
 Start-Sleep -Seconds 2
@@ -35,7 +35,7 @@ Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 $text = Get-Content $cliLog -Raw
 $want = @(
     "GM handshake complete (client side)",
-    "<- WELCOME protocol=5",
+    "<- WELCOME protocol=6",
     # M3.1: the name rides the handshake, so a WELCOME that does not carry it is a failure -
     # the field order slip this catches is exactly the one that cost M2.2 a whole evening.
     "name='mock'",
@@ -51,7 +51,12 @@ $want = @(
     # apply path - "the host says a structure exists here, so put it here" - has no offline
     # test at all, because the mock used to be only ever a client. (The log line is
     # "MUTATION seq=...", not "MUTATION_PLACE": that is how the peer prints it.)
-    "<- MUTATION seq="
+    "<- MUTATION seq=",
+    # M3.1: the world snapshot. The host's land cells go out in chunks and the last chunk
+    # is empty - that is the end of the snapshot. Without both, the client's apply path
+    # for the land has no offline test at all.
+    "<- SNAP_LAND room=",
+    "land snapshot done:"
 )
 $failed = @()
 foreach ($w in $want) { if ($text -notmatch [regex]::Escape($w)) { $failed += $w } }
@@ -61,6 +66,6 @@ if ($failed.Count -gt 0) {
     Write-Host "--- client log ---"; Get-Content $cliLog -Tail 20
     exit 1
 }
-Write-Host "e2e ok: handshake, welcome, pong, structure table, item table, the three loot packets and INTENT_PLACE all seen"
+Write-Host "e2e ok: handshake, welcome, pong, structure table, item table, the three loot packets, INTENT_PLACE and the land snapshot all seen"
 Write-Host "(logs in $log)"
 exit 0

@@ -1101,6 +1101,149 @@ for (var _st_j = 0; _st_j < _st_c; _st_j++) {
 }
 CoopSend(_st_b);
 
+#define CoopSendLandSnapshot()
+// The world's land, cell by cell, so the client's world becomes the host's world.
+//
+// **This is the piece that makes the two worlds the same world.** Until the client has
+// the host's land, every spot the host builds on may be water on the client's side - which
+// is exactly why the client had to snap a structure to a free cell, and why the two sides
+// could never agree on where a building stands.
+//
+// **The grid is the world's own 16 px lattice, sampled at the cell centres** - 8, 24, ...
+// 1336 - and the world is 1344 px across, so there are 84 x 84 = 7056 cells to ask about.
+// A cell is land when the game's own `WaterCollision` says it is not water: the same
+// question the placement check asks, asked the game's way, so the answer is the game's.
+//
+// **The reference implementation does exactly this.** PencilPal's `SyncLand` walks the
+// same grid and sends one `LAND` packet per land cell, and its `DeleteLand` makes the
+// client match the host's set. It is the only land sync anyone has seen run in this build,
+// and it is what the two function names come from. What is different here is the wire
+// format: the cells go out in **chunks**, because a packet per cell is what made
+// PencilPal's land sync "very slow on big worlds" (their own TODO).
+//
+// The last chunk of a snapshot carries a count of 0: that is the end marker, and the
+// client runs its own clean-up pass when it sees it.
+//
+// The generation byte tells the client that a **new** snapshot is starting, so it can
+// clear the bitmap it keeps of the host's land.
+//
+// **No `exit` here.** This macro is called from the middle of the HELLO handler, and an
+// `exit` in a macro leaves that handler - which would skip the rest of it, the sequence
+// reset among other things. The guard is an `if` for the same reason.
+if (instance_exists(objPlayer)) {
+var _ls_room = objPlayer.room;
+// The cells, as two parallel lists: the grid is 84 x 84 and the walk asks the game
+// about every one of them, so the list is built once and then sent in pieces.
+var _ls_xs = [];
+var _ls_ys = [];
+for (var _ls_y = 8; _ls_y < 1344; _ls_y += 16) {
+    for (var _ls_x = 8; _ls_x < 1344; _ls_x += 16) {
+        if (WaterCollision(_ls_x, _ls_y) == 0) {
+            array_push(_ls_xs, _ls_x);
+            array_push(_ls_ys, _ls_y);
+        }
+    }
+}
+global.coopLandGen = (global.coopLandGen + 1) % 250;
+var _ls_gen = global.coopLandGen;
+var _ls_total = array_length(_ls_xs);
+var _ls_sent  = 0;
+while (_ls_sent < _ls_total) {
+    var _ls_n = _ls_total - _ls_sent;
+    if (_ls_n > 512) _ls_n = 512;
+    var _ls_b = buffer_create(64, buffer_grow, 1);
+    buffer_write(_ls_b, buffer_u8, CoopCmd.SNAP_LAND);
+    buffer_write(_ls_b, buffer_u8, _ls_room);
+    buffer_write(_ls_b, buffer_u8, _ls_gen);
+    buffer_write(_ls_b, buffer_u8, 1);      // flags: bit 0 = the client should drop the land it has and the host does not
+    buffer_write(_ls_b, buffer_u16, _ls_n);
+    for (var _ls_i = 0; _ls_i < _ls_n; _ls_i += 1) {
+        buffer_write(_ls_b, buffer_u16, _ls_xs[_ls_sent + _ls_i]);
+        buffer_write(_ls_b, buffer_u16, _ls_ys[_ls_sent + _ls_i]);
+    }
+    CoopSend(_ls_b);
+    _ls_sent += _ls_n;
+}
+// The end marker: a chunk with no cells.
+var _ls_end = buffer_create(16, buffer_grow, 1);
+buffer_write(_ls_end, buffer_u8, CoopCmd.SNAP_LAND);
+buffer_write(_ls_end, buffer_u8, _ls_room);
+buffer_write(_ls_end, buffer_u8, _ls_gen);
+buffer_write(_ls_end, buffer_u8, 1);
+buffer_write(_ls_end, buffer_u16, 0);
+CoopSend(_ls_end);
+Trace("Co-op: world snapshot sent - " + string(_ls_total) + " land cells in room "
+      + string(_ls_room) + " (generation " + string(_ls_gen) + ").");
+}
+
+#define CoopApplyLandSnapshotEnd(_room, _replace)
+// The host's land set is complete: now make this side match it.
+//
+// Two things can differ. A cell the host has and this side has not was **placed** when
+// the chunk arrived. A cell this side has and the host does not is **removed** here.
+//
+// **The reference implementation removes it the same way** - PencilPal's `DeleteLand`
+// walks the same grid and calls `RemoveLandfill` on every cell of ours that is not in
+// the host's set - and it is why the client's island becomes the host's island instead
+// of the two of them growing into each other.
+//
+// The removal is behind a flag because it is the one part of the snapshot that cannot be
+// undone by asking again: a peer that sends a land set which is not a real world (the
+// mock peer has no world at all) would take the island away. The flag is set by the host,
+// which has a world and means it.
+var _dl_removed = 0;
+if (_replace != 0 && instance_exists(objPlayer) && objPlayer.room == _room) {
+    for (var _dl_y = 8; _dl_y < 1344; _dl_y += 16) {
+        for (var _dl_x = 8; _dl_x < 1344; _dl_x += 16) {
+            if (WaterCollision(_dl_x, _dl_y) == 0) {
+                var _dl_cell = floor(_dl_x / 16) + floor(_dl_y / 16) * 84;
+                if (_dl_cell < 0 || _dl_cell >= 7056) continue;
+                if (global.coopHostLand[_dl_cell] == 0) {
+                    with (objPlayer) { RemoveLandfill(_dl_x, _dl_y); }
+                    _dl_removed += 1;
+                }
+            }
+        }
+    }
+}
+global.coopLandRemoved = _dl_removed;
+Trace("Co-op: land snapshot applied - " + string(global.coopLandAdded) + " cells placed, "
+      + string(_dl_removed) + " removed.");
+// The snapshot can take the ground out from under the player: this side's island was
+// removed and the host's put in its place, and the player was standing on the old one.
+CoopKeepPlayerOnLand();
+
+#define CoopKeepPlayerOnLand()
+// Put the player back on land if the snapshot left them in the water.
+//
+// The world's rule is that nothing stands in water, so a player left standing where the
+// ground was taken away is a player in the water. The nearest land is the right place to
+// put them: the host's island is around here, and the search is the same spiral the
+// peer's stand spot uses.
+if (instance_exists(objPlayer)) {
+    if (WaterCollision(objPlayer.x, objPlayer.y) != 0) {
+        var _kp_moved = false;
+        for (var _kp_r = 1; _kp_r <= 24 && !_kp_moved; _kp_r += 1) {
+            for (var _kp_dy = -_kp_r; _kp_dy <= _kp_r && !_kp_moved; _kp_dy += 1) {
+                for (var _kp_dx = -_kp_r; _kp_dx <= _kp_r && !_kp_moved; _kp_dx += 1) {
+                    if (abs(_kp_dx) != _kp_r && abs(_kp_dy) != _kp_r) continue;
+                    var _kp_x = objPlayer.x + _kp_dx * 16;
+                    var _kp_y = objPlayer.y + _kp_dy * 16;
+                    if (WaterCollision(_kp_x, _kp_y) == 0) {
+                        objPlayer.x = _kp_x;
+                        objPlayer.y = _kp_y;
+                        _kp_moved = true;
+                    }
+                }
+            }
+        }
+        if (_kp_moved) {
+            Trace("Co-op: the land snapshot left the player in the water - moved to "
+                  + string(floor(objPlayer.x)) + "," + string(floor(objPlayer.y)) + ".");
+        }
+    }
+}
+
 #define CoopDumpStructures()
 // F9. Is the object our table calls a structure really one? `isStruct` asks the
 // game itself (object_is_ancestor against its own parStructure), which is the
@@ -1531,6 +1674,10 @@ switch (_cmd) {
         CoopSendItemTable();
         global.coopSeq = 0;   // a fresh peer starts from a clean sequence
         Trace("Co-op: handshake complete, peer is " + _v + ".");
+        // M3.1: the world itself. The client's island has to become the host's island,
+        // or every spot the host builds on may be water on the client's side and the
+        // two sides can never agree on where a building stands.
+        CoopSendLandSnapshot();
         break;
 
     case CoopCmd.WELCOME:
@@ -1862,6 +2009,49 @@ switch (_cmd) {
               + " names match ours.");
         if (_match < _tn) {
             Trace("Co-op: WARNING - our structure databases differ; the two installs are not the same build.");
+        }
+        break;
+
+    case CoopCmd.SNAP_LAND:
+        // The host's world: its land, cell by cell, in chunks (M3.1).
+        //
+        // The chunk carries the room, the snapshot's generation, the flags and the cells.
+        // The generation is what says "a new snapshot starts here", so the bitmap of the
+        // host's land is cleared before the new cells go into it.
+        var _sl_room  = buffer_read(_buf, buffer_u8);
+        var _sl_gen   = buffer_read(_buf, buffer_u8);
+        var _sl_flags = buffer_read(_buf, buffer_u8);
+        var _sl_n     = buffer_read(_buf, buffer_u16);
+        if (_sl_gen != global.coopLandGen) {
+            global.coopLandGen  = _sl_gen;
+            global.coopHostLand = array_create(7056, 0);
+            global.coopLandAdded = 0;
+        }
+        var _sl_added = 0;
+        for (var _sl_i = 0; _sl_i < _sl_n; _sl_i += 1) {
+            var _sl_x = buffer_read(_buf, buffer_u16);
+            var _sl_y = buffer_read(_buf, buffer_u16);
+            var _sl_cell = floor(_sl_x / 16) + floor(_sl_y / 16) * 84;
+            if (_sl_cell < 0 || _sl_cell >= 7056) continue;
+            global.coopHostLand[_sl_cell] = 1;
+            // **Only where this side has water.** The cell is then made land with the
+            // game's own function - `PlaceLandfill`, the same call the reference mod
+            // makes, in the same `with(objPlayer)` context, because that is the context
+            // the game's function expects.
+            //
+            // A cell this side already has as land is left alone: the point is to fill
+            // in what is missing, not to rebuild what is there.
+            if (instance_exists(objPlayer) && objPlayer.room == _sl_room) {
+                if (WaterCollision(_sl_x, _sl_y) != 0) {
+                    with (objPlayer) { PlaceLandfill(_sl_x, _sl_y); }
+                    _sl_added += 1;
+                }
+            }
+        }
+        global.coopLandAdded += _sl_added;
+        if (_sl_n == 0) {
+            // The end of the snapshot.
+            CoopApplyLandSnapshotEnd(_sl_room, _sl_flags);
         }
         break;
 

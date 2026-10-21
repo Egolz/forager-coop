@@ -65,7 +65,10 @@ if (_spr <= 0) {
 // a position that can be inside a tree or in the water, and the owner saw exactly that. The
 // host knows the world, so it pulls the peer onto ground a body could stand on, which is the
 // same pair of checks the placement code already asks. Mode 0: a peer, so its own position
-// is kept and only the cell it stands in has to be free. See CoopStandSpot.
+// is kept, its cell has to be free of solids - **the player does not count**, because the
+// mock stands on the player's own cell on purpose: the game spawns nothing on the tile a
+// player stands on, and that is what keeps ore off the mock (live, 2026-10-21).
+// See CoopStandSpot.
 CoopStandSpot(global.coopPeer.x, global.coopPeer.y, 0);
 var _x = global.coopStandX;
 var _y = global.coopStandY;

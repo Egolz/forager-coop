@@ -769,20 +769,22 @@ class Peer:
         """What the host side streams.
 
         The host tells the client where it is, so the client can draw it. The mock is not a
-        game and has no player of its own, so it picks a spot **once**, next to the client when
-        the client appears, and then **stands still**.
+        game and has no player of its own, so it stands **exactly where the client is**.
 
-        It used to stand next to the client all the time, which made it look glued to the
-        camera - the owner's own words. A peer that is not told to walk does not walk, and
-        the host is no exception.
+        That is not a shortcut, it is the point: the game has a rule that **nothing spawns on
+        the tile a player stands on**, and the owner noticed ore and grass appearing on the
+        mock's tile (live, 2026-10-21). Standing on the client's own tile puts the mock
+        under that rule, so the game leaves it alone.
+
+        It used to stand a fixed 96 px to the side, which is why things spawned there - and
+        which also made it look glued to the camera.
         """
         now = time.time()
         if not self.handshaken or now - self._last_host_pos < 0.1:
             return
         self._last_host_pos = now
-        if self.host_spot is None:
-            px, py = self.player if self.player else (620, 620)
-            self.host_spot = (px - 96, py)
+        px, py = self.player if self.player else (620, 620)
+        self.host_spot = (px, py)
         hx, hy = self.host_spot
         self.send(pos(hx, hy, angle=0, facing=1, sprite=-1, image=0, room=self.room))
 
@@ -819,47 +821,44 @@ class Peer:
                 self.send(ping(self.nonce))
                 log(f"-> PING nonce={self.nonce}")
                 self.last_ping = now
-            # **Stand still, but reappear if the owner walks away.**
+            # **Stand exactly where the owner stands.**
             #
             # The mock is a stand-in for a second player, not a player: it has no walk
             # command, so it has no business following the host frame by frame. The earlier
             # version walked a small square around the host's *live* position, which glued
             # the puppet to the host's camera - the owner noticed it as "the mock follows
-            # the player" (live, 2026-10-21).
+            # the player" (live, 2026-10-21). The version after that stood still at an
+            # anchor, which left it behind when the owner walked off ("it appeared not next
+            # to me").
             #
-            # But a stand-in that stays where it was put is not much use either: the owner
-            # walked off and the mock was left behind, out of sight ("it appeared not next
-            # to me"). So the anchor is **re-picked when the host gets far from it**: the
-            # mock stands still while the owner is in the area, and reappears nearby when
-            # the owner has genuinely gone somewhere else.
+            # Both of those put the mock on a tile of its own, and **the game spawns on
+            # such a tile**: the owner saw ore and grass appear on the mock (live,
+            # 2026-10-21). The game has a rule that **nothing spawns on the tile a player
+            # stands on**, and the only way to be under that rule is to be on the player's
+            # tile. So the mock stands on the player's own position - exactly, not a few
+            # pixels to the side, because a few pixels to the side is a different cell on
+            # the world's 16 px grid and the rule would not cover it.
             #
-            # The offset is **two cells (32 px)**, not the 96 px of the first version: that
-            # was far enough to read as "somewhere over there" rather than "standing next
-            # to me" on a 1280x720 screen, where the player sprite is about 24 px tall.
+            # The mock is still a stand-in: it does not walk on its own, it is simply
+            # reported at the owner's position, which is the position its host will draw
+            # it at anyway.
             #
-            # **No position is sent before the anchor exists.** The first version sent the
-            # fallback (620, 620) - an arbitrary point in the world - and the host drew the
-            # puppet there, so the mock could appear far from the owner and only then jump
-            # to the right place. The host draws nothing until a position arrives, so
-            # waiting is free and correct.
+            # **No position is sent before the owner has reported one.** The first version
+            # sent the fallback (620, 620) - an arbitrary point in the world - and the host
+            # drew the puppet there, so the mock could appear far from the owner and only
+            # then jump to the right place. The host draws nothing until a position
+            # arrives, so waiting is free and correct.
             #
             # The build spots are a different thing and keep using the host's live position:
             # the host validates them, and a build that lands where the owner is standing is
             # the only placement test worth running.
             if self.player is not None:
-                if self.anchor is None:
-                    self.anchor = (self.player[0] - 32, self.player[1])
-                else:
-                    _dx = self.player[0] - self.anchor[0]
-                    _dy = self.player[1] - self.anchor[1]
-                    if _dx * _dx + _dy * _dy > 128 * 128:
-                        self.anchor = (self.player[0] - 32, self.player[1])
-                        log(f"   re-anchoring at {self.anchor} - the host moved away")
-            if self.anchor is None:
-                ax = ay = None
-            else:
+                if self.anchor != self.player:
+                    self.anchor = self.player
+                    self.px, self.py = self.anchor
                 ax, ay = self.anchor
-                self.px, self.py = ax, ay
+            else:
+                ax = ay = None
             if ax is not None:
                 self.send(pos(ax, ay, angle=0, facing=1, sprite=-1, image=0, room=self.room))
         # ask the host to build something; retry other spots on a spot refusal

@@ -296,6 +296,10 @@ if (!global.coopBodyTried) {
 //   mode 0 - a **peer**. Its position is wherever the peer stands, which is not on the
 //     lattice at all, so the search starts at its exact coordinates and moves by whole cells:
 //     the remainder is kept and only the cell the peer stands in has to be free.
+//     "Free" here means **free of solids** - trees, rocks, ore nodes, buildings. Living
+//     things do not count, because a peer is a drawing and the player has to be allowed
+//     to stand on the peer's cell: that is the cell the game protects from spawning
+//     (live, 2026-10-21 - ore appeared on the mock's tile until it stood on the player).
 //
 //   mode 1 - a **structure**. A structure stands on the **corner** of a cell (x mod 16 = 0)
 //     and covers a **2x2 block** of cells centred on that corner - so the cells it covers are
@@ -333,12 +337,18 @@ if (_ss_key != global.coopStandKey) {
                             var _ss_sx = _ss_cx + _ss_fx * 8;
                             var _ss_sy = _ss_cy + _ss_fy * 8;
                             if (WaterCollision(_ss_sx, _ss_sy) != 0) _ss_free = false;
-                            else if (CoopSolidInCell(_ss_sx, _ss_sy) != 0) _ss_free = false;
+                            else if (CoopSolidInCell(_ss_sx, _ss_sy, 1) != 0) _ss_free = false;
                         }
                     }
                 } else {
+                    // A peer is a **drawing**, not a body. Living things - the player,
+                    // NPCs, enemies - do not stand in its way, and the one cell the peer
+                    // shares with the player is the cell the game protects from spawning
+                    // (nothing spawns on a player), which is where the peer is put on
+                    // purpose. Trees, rocks, ore nodes and buildings still do: the peer
+                    // is pulled out of them.
                     if (WaterCollision(_ss_cx, _ss_cy) != 0) _ss_free = false;
-                    else if (CoopSolidInCell(_ss_cx, _ss_cy) != 0) _ss_free = false;
+                    else if (CoopSolidInCell(_ss_cx, _ss_cy, 0) != 0) _ss_free = false;
                 }
                 if (!_ss_free) continue;
                 global.coopStandX = _ss_cx;
@@ -859,10 +869,26 @@ for (var _sld_li = 0; _sld_li < array_length(global.coopLivingObjs); _sld_li += 
 }
 return _sld_hits;
 
-#define CoopSolidInCell(_x, _y)
-// -> how many solids or living things stand in the **same build-cell** as (_x,_y).
+#define CoopSolidInCell(_x, _y, _living)
+// -> how many solids - and, when `_living` is not 0, how many living things as well -
+//    stand in the **same build-cell** as (_x,_y).
 //    A cell is 16 px; `floor(v / 16)` is its index, which is how this differs from
 //    CoopSolidNear's "within a radius" question.
+//
+// **The living half is a question, not a detail.** Two callers want different answers
+// and used to share one, which was wrong for both:
+//
+//   `_living = 1` - a **structure** is being put down. The owner asked for a free spot:
+//     not on a tree, a rock, an ore node, a building, water **or the player**. A
+//     character standing in the footprint means the structure would be built on top of
+//     them, so living things block it.
+//
+//   `_living = 0` - a **peer** is being placed. The peer is a drawing, not a body: it
+//     does not push the player and the player does not push it. Counting the player
+//     here would move the peer off the player's own cell - and the game's rule that
+//     **nothing spawns on the tile a player stands on** is exactly what protects the
+//     peer's spot from ore and grass (live, 2026-10-21). The peer stands on the player
+//     on purpose, so that the game leaves that tile alone.
 //
 // This exists because a radius cannot answer "is this cell taken". The placement check
 // sampled four points 24 px apart with `global.coopSolidRadius = 24`, so the samples
@@ -891,13 +917,15 @@ for (var _sic_si = 0; _sic_si < array_length(global.coopSolidObjs); _sic_si += 1
             && floor(_sic_inst.y / 16) == _sic_cell_y) _sic_hits += 1;
     }
 }
-for (var _sic_li = 0; _sic_li < array_length(global.coopLivingObjs); _sic_li += 1) {
-    var _sic_lobj = array_get(global.coopLivingObjs, _sic_li);
-    var _sic_ln = instance_number(_sic_lobj);
-    for (var _sic_lj = 0; _sic_lj < _sic_ln; _sic_lj += 1) {
-        var _sic_linst = instance_find(_sic_lobj, _sic_lj);
-        if (floor(_sic_linst.x / 16) == _sic_cell_x
-            && floor(_sic_linst.y / 16) == _sic_cell_y) _sic_hits += 1;
+if (_living != 0) {
+    for (var _sic_li = 0; _sic_li < array_length(global.coopLivingObjs); _sic_li += 1) {
+        var _sic_lobj = array_get(global.coopLivingObjs, _sic_li);
+        var _sic_ln = instance_number(_sic_lobj);
+        for (var _sic_lj = 0; _sic_lj < _sic_ln; _sic_lj += 1) {
+            var _sic_linst = instance_find(_sic_lobj, _sic_lj);
+            if (floor(_sic_linst.x / 16) == _sic_cell_x
+                && floor(_sic_linst.y / 16) == _sic_cell_y) _sic_hits += 1;
+        }
     }
 }
 return _sic_hits;
@@ -1691,7 +1719,7 @@ switch (_cmd) {
         var _oq_solid = 0;
         for (var _oq_dx = -1; _oq_dx <= 1; _oq_dx += 2) {
             for (var _oq_dy = -1; _oq_dy <= 1; _oq_dy += 2) {
-                if (CoopSolidInCell(_ix + _oq_dx * 8, _iy + _oq_dy * 8) > 0) _oq_solid += 1;
+                if (CoopSolidInCell(_ix + _oq_dx * 8, _iy + _oq_dy * 8, 1) > 0) _oq_solid += 1;
             }
         }
         if (_oq_solid > 0) {

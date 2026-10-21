@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.73-m5i";
+global.coopVersion  = "0.0.74-m5j";
 global.coopProtocol = 9;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -171,6 +171,10 @@ global.coopPeerStepAt = 0;      // current_time of the packet the step came from
 global.coopPeerStepRate = 0;    // index-units per millisecond, measured between two packets
 global.coopPeerStepPrev = 0;    // the step in the packet before, to measure that rate
 global.coopPeerStepPrevAt = 0;  // and when it arrived
+// M5j: **the puppet's own walk frame**, which is what is actually drawn - the peer's index is a
+// free-running timer (measured; see the draw handler) and is not the walk, so the cycle is driven
+// here from the puppet's own movement. Fractional, so the frames are smooth rather than stepped.
+global.coopPeerFrameF = 0;
 global.coopStepMax = 5;      // the cycle's last frame: six index-units, measured on the wire
 global.coopRollSpin  = 0;      // seconds of roll spin left on the puppet
 global.coopRollStep  = 0.25;   // how long that spin lasts (the roll's own duration)

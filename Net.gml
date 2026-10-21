@@ -1835,6 +1835,25 @@ for (var _pe_i = 0; _pe_i < array_length(_pe_names); _pe_i++) {
     array_push(_pe_lines, _pe_line);
 }
 
+// **How many frames do the two body sprites have?** The puppet's cycle is drawn over
+// `global.coopStepMax + 1 = 6` frames, and a frame past the end of a sprite draws **nothing** -
+// so if either body sprite has fewer than six, the puppet will vanish for part of every cycle.
+// This is asked rather than assumed for the same reason the dust's frame count was: a wrong
+// count in the high direction draws blank frames, which reads as a stutter or a vanish.
+var _pe_sprs = ["sprPlayerIdle", "sprPlayerWalk"];
+for (var _pe_s = 0; _pe_s < array_length(_pe_sprs); _pe_s++) {
+    var _pe_sn = _pe_sprs[_pe_s];
+    var _pe_si = asset_get_index(_pe_sn);
+    if (_pe_si > 0) {
+        array_push(_pe_lines, "sprite '" + _pe_sn + "' -> " + string(_pe_si)
+                   + " has " + string(sprite_get_number(_pe_si)) + " frame(s)"
+                   + " h " + string(sprite_get_height(_pe_si))
+                   + " yoff " + string(sprite_get_yoffset(_pe_si)));
+    } else {
+        array_push(_pe_lines, "sprite '" + _pe_sn + "' -> NOT FOUND");
+    }
+}
+
 // **Where to put it: one cell to the player's right, on the player's own row**, which is ground
 // the player is standing on, so it is never water and never inside a wall. `depth` is the
 // player's own depth so the slime sorts with the player rather than behind the terrain.

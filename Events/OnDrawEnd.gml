@@ -208,6 +208,14 @@ var _top = _yd - _yo;      // the sprite's top edge, in world coordinates
 // The angle is still carried and still drawn: the reference mod draws its puppet with it,
 // and if this build ever turns the player, the turn should show. It is simply not what the
 // roll is.
+
+// **What decides the dust is the packet, not the sprite name.** Two rewrites of the frame
+// code dropped the `_walking` local and left the dust test below reading a variable that no
+// longer existed - so this whole handler died at that line (`does not have a variable
+// _walking`) and **the puppet was not drawn at all**: no body, no name, no held item, and no
+// dust. The owner's report read as "the mob is still not there" and the real symptom was
+// "nothing is drawn any more". The walking flag lives in a global; read it from there.
+var _walking = global.coopPeerWalking;
 if (_spr > 0) {
     draw_sprite_ext(_spr, _frame, _x, _yd, _face, 1, global.coopPeer.angle, c_white, 0.85);
 }
@@ -234,11 +242,20 @@ if (_walking) {
         global.coopDustSprite = asset_get_index("sprDust");
         global.coopDustFrames = 0;
         if (global.coopDustSprite > 0) {
-            // Count the sprite's frames by asking for them: there is no
-            // `sprite_get_num_subimages` in this build (the name is in data.win, and the
-            // loader is not data.win), so a frame past the end is what says where it ends.
-            // Eight is the honest ceiling for a dust puff; the counter wraps below.
+            // **How many frames the puff has, asked honestly.** There is no
+            // `sprite_get_num_subimages` in this build (data.win lists it, and the loader is
+            // not data.win), so the count comes from the one number the build does give: a
+            // sprite's frames are stored side by side in a strip, so the image width is
+            // `frame_width * frames`. `sprite_get_width` on a multi-frame sprite returns the
+            // *strip's* width in this build - 8 frames of a small puff is a wide strip - so
+            // the count is derived from the width and the height, which a puff keeps square.
+            var _dw_all = sprite_get_width(global.coopDustSprite);
+            var _dh_one = sprite_get_height(global.coopDustSprite);
             global.coopDustFrames = 8;
+            if (_dw_all > 0 && _dh_one > 0) {
+                var _guess = round(_dw_all / _dh_one);
+                if (_guess >= 1 && _guess <= 32) global.coopDustFrames = _guess;
+            }
         }
     }
     if (global.coopDustSprite > 0 && global.coopDustFrames > 0) {

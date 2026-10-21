@@ -293,12 +293,17 @@ if (array_length(global.coopBushObj) > 0 && instance_exists(objPlayer)) {
 // the bush census uses: parallel arrays, `instance_find`, nothing that needs a `ds_map`.
 if (!global.coopMobResolved && instance_exists(objPlayer)) {
     global.coopMobResolved = true;
+    // **The walk is over `all` - every instance GameMaker has - and the objects are collected
+    // into a plain array.** This started as a second global array, and that is the bug the
+    // owner hit: it was never initialised, so the *first* check (`global.coopMobObj == -2`,
+    // when the array did not exist, so it read as 0) never matched and the census stayed
+    // empty forever - "watching 0 object(s) out of 18 in the world: -2", with `-2` printed
+    // for an array that was never a list. A local array has no such state to get wrong.
     var _all_objs = [];
     var _n_all = 0;
-    // `instance_number(all)` is the whole live world; asking it per object index would be
-    // thousands of calls, so the objects are taken from the instances themselves.
     var _cnt_all = instance_number(all);
     if (_cnt_all > 4000) _cnt_all = 4000;      // the walk is a census, not a sweep of the map
+    var _with_hp = 0;
     for (var _ai = 0; _ai < _cnt_all; _ai += 1) {
         var _ainst = instance_find(all, _ai);
         if (!instance_exists(_ainst)) continue;
@@ -310,14 +315,20 @@ if (!global.coopMobResolved && instance_exists(objPlayer)) {
         if (_known) continue;
         _all_objs[_n_all] = _aobj;
         _n_all += 1;
-        // Is this object an enemy? Only the field says so.
-        if (variable_instance_exists(_ainst, "hp") && _aobj != objPlayer.object_index) {
-            array_push(global.coopMobObj, _aobj);
+        // Is this object an enemy? **Only the field says so.** A creature carries `hp`; a
+        // bush, a rock or a building does not. `variable_instance_exists` is the field test
+        // the reference mod proves the loader knows (data.win does not list it, and
+        // data.win is not the loader's function table).
+        if (variable_instance_exists(_ainst, "hp")) {
+            _with_hp += 1;
+            var _is_player = false;
+            if (instance_exists(objPlayer) && _aobj == objPlayer.object_index) _is_player = true;
+            if (!_is_player) array_push(global.coopMobObj, _aobj);
         }
     }
     var _mob_line = "Co-op: enemy census watching " + string(array_length(global.coopMobObj))
-                  + " object(s) out of " + string(_n_all)
-                  + " in the world: " + string(global.coopMobObj);
+                  + " of the " + string(_with_hp) + " object(s) carrying hp, out of "
+                  + string(_n_all) + " in the world: " + string(global.coopMobObj);
     Trace(_mob_line);
     CoopSendDebugLine(_mob_line);
 }

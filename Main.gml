@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.67-m5c";
+global.coopVersion  = "0.0.68-m5d";
 global.coopProtocol = 9;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -236,8 +236,8 @@ global.coopBushObj    = -2;     // -2 = unresolved, -1 = no such object in this 
 // --- M3.5: the enemies ------------------------------------------------------------------
 // The census: which enemy objects exist here (resolved once), and the throttles that keep
 // the diagnostic from becoming a wall of text.
-global.coopMobObj   = -2;   // -2 = unresolved; else the list of enemy object indices
-global.coopMobTick  = 0;    // steps since the census started
+global.coopMobObj   = [];   // the objects the census watches - built from the live world, once
+global.coopMobTick  = 0;    // steps since the census started - the log throttle's clock
 global.coopMobSeen  = -1;   // how many enemies the census saw when it last reported
 global.coopMobResolved = false;  // the watch list is built from the live world, once
 

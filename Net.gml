@@ -1743,10 +1743,31 @@ switch (_cmd) {
         // OnStructureSpawn() fires before the game sets a depth (the mutation
         // went out with 0 for an instance that really sat at -656), and depth is
         // a pure function of y anyway, so both ends derive the same value.
+        // **Is it already here?** The player built it, so this side already has it, and the
+        // confirmation is about a structure that **exists**. Looking for a free spot first
+        // would see **the very structure being confirmed** as the obstacle - its own 2x2
+        // footprint contains it - and move the furnace a cell to the left and leave a
+        // duplicate behind. That is exactly what the owner saw (live, 2026-10-21).
+        var _mobj = CoopStructObject(_msid);
+        var _mhit = -1;
+        if (_mobj >= 0) _mhit = CoopStructureAt(_mobj, _mx, _my);
+        if (_mhit >= 0) {
+            Trace("Co-op: <- mutation seq " + string(_seq) + " '" + _mname + "' at "
+                  + string(_mx) + "," + string(_my) + " - already here, adopted.");
+            CoopSendDebugLine("selftest PASS: mutation seq " + string(_seq) + " applied, '"
+                              + _mname + "' at " + string(_mx) + "," + string(_my)
+                              + " (already there)");
+            break;
+        }
         // **Put it on ground a body could stand on.** The host validated this placement
         // against *its* world, and the client's world is not the same world yet - there is
         // no snapshot - so a spot that is dry for the host can be water for the client. The
         // live run of 2026-10-21 put a furnace half into a lake because of it.
+        //
+        // The search asks the same question the host asks: a structure stands on the
+        // **corner** of a cell and covers a **2x2 block** of cells whose centres are at
+        // +/-8 from that corner, and every one of them has to be free of water, of a tree,
+        // a rock, an ore node, a building **and of a living thing** - the player included.
         //
         // The snap is to the **nearest free cell**, so the structure lands as close to where
         // the host said as the ground allows, and it **cancels itself** once the worlds are
@@ -1772,8 +1793,7 @@ switch (_cmd) {
         // its own world, and the client's world is not that world yet - so asserting the
         // requested position reported a failure for a mutation that had been applied
         // correctly. Both positions are in the line, so the log says which was which.
-        var _mobj = CoopStructObject(_msid);
-        var _mhit = -1;
+        _mhit = -1;
         if (_mobj >= 0) _mhit = CoopStructureAt(_mobj, _mpx, _mpy);
         if (_mhit >= 0) {
             Trace("Co-op: SELF-TEST PASS - seq " + string(_seq) + " applied: '"

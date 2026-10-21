@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.72-m5h";
+global.coopVersion  = "0.0.73-m5i";
 global.coopProtocol = 9;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -155,7 +155,23 @@ global.coopWalkSprite = -1;
 global.coopPeerFrame = 0;      // the peer's frame index, as reported
 global.coopPeerStep  = 0;      // the peer's sprite step (the index over two ticks)
 global.coopPeerRepeat = 0;     // how many packets have been seen, so a reset is not a start
-global.coopStepMax   = 5;      // the cycle's last frame: six index-units, measured on the wire
+// M5i: **the frame is continued locally between packets, not frozen on the last one.**
+//
+// The peer's index arrives twenty times a second and the game draws sixty, so a frame drawn as
+// the last reported value sits still for two frames and then jumps - the stepping the owner sees.
+// The index is not a guess to reproduce: the packet already says how fast it is running (the
+// difference between two of them, over the time between two of them), so the puppet **carries on
+// at that rate** for the frames with no packet, and is snapped back to the reported value when
+// the next one lands.
+//
+// This is **not** the `local cycle of twelve` that already failed: that invented a clock of its
+// own and drifted from the peer's. This one is driven by the peer's own last measured rate and
+// lasts at most one packet interval, so it is a continuation, not a second timebase.
+global.coopPeerStepAt = 0;      // current_time of the packet the step came from
+global.coopPeerStepRate = 0;    // index-units per millisecond, measured between two packets
+global.coopPeerStepPrev = 0;    // the step in the packet before, to measure that rate
+global.coopPeerStepPrevAt = 0;  // and when it arrived
+global.coopStepMax = 5;      // the cycle's last frame: six index-units, measured on the wire
 global.coopRollSpin  = 0;      // seconds of roll spin left on the puppet
 global.coopRollStep  = 0.25;   // how long that spin lasts (the roll's own duration)
 global.coopPeerHold = -1;
@@ -193,6 +209,13 @@ global.coopDrawAt = 0;       // when the puppet was last moved, for its own step
 global.coopLastX = 0;
 global.coopLastY = 0;
 global.coopLastMoved = false;
+// M5i: is `objPlayer.image_index` really the walk clock? The probe in CoopSendPos reports the
+// index delta against the distance the player covered, once every two seconds, so the ratio is
+// measured on the live object instead of being inferred from two notes that disagree.
+global.coopIdxProbeTick = 0;
+global.coopIdxProbeIdx  = 0;
+global.coopIdxProbeX    = 0;
+global.coopIdxProbeY    = 0;
 // Where the peer is actually drawn. The host decides, because the host is the side that
 // knows the world - a peer with no physics (the mock) reports a position inside a tree or in
 // the water, and the host pulls it onto ground a body could stand on.

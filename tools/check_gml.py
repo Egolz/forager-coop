@@ -276,7 +276,8 @@ def find_defines(text: str) -> list[tuple[str, int, str]]:
     return blocks
 
 
-def check_forbidden(where: str, text: str, problems: list[str]) -> None:
+def check_forbidden(where: str, text: str, problems: list[str],
+                    warns: list[str] | None = None) -> None:
     """Constructs this build's mod compiler cannot compile at all.
 
     `try`/`catch` is the important one, and it is not a style preference: the
@@ -296,6 +297,17 @@ def check_forbidden(where: str, text: str, problems: list[str]) -> None:
             problems.append(f"{where}:{ln}: `{m.group(1)}` - this loader cannot compile "
                             f"try/catch; the game crashes and the mod never loads. "
                             f"Use an `if` guard.")
+        # **`while` is proven in this loader - by our own live-verified code**, not by the
+        # reference mod. The land and structure snapshot batches (`while (_ls_sent < _ls_total)`)
+        # ran live many times (M3.1/M3.2) with no compile error. The reference mod simply never
+        # needed one, which is why the first pass read its absence as evidence against. So this
+        # is not a warning - it is a reminder that the loop **must terminate**, because a
+        # non-terminating `while` inside a mod event hangs the game's own frame.
+        m = re.search(r"(^|[^\w])(do)\s*[\(\{]", line)
+        if m:
+            warns.append(f"{where}:{ln}: `do` is not used by any mod this project has run; "
+                         f"`while` is proven (the snapshot batches use it live), so prefer "
+                         f"`while`/`for` over `do` unless it is proven on a COMPILE")
 
 
 def check_string_math(where: str, text: str, problems: list[str]) -> None:
@@ -580,7 +592,7 @@ def main(argv: list[str] | None = None) -> int:
     for f in files:
         text = stripped[f]
         where = f.relative_to(here) if here in f.parents else f
-        check_forbidden(str(where), text, problems)
+        check_forbidden(str(where), text, problems, warns)
         check_string_math(str(where), text, problems)
         check_key_constants(str(where), text, problems)
         check_enum_members(str(where), text, warns)

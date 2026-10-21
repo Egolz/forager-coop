@@ -439,6 +439,43 @@ buffer_write(_b, buffer_string, global.coopLastMoved ? "walk" : "idle");
 // interpolated frame is what put the puppet a packet behind the player (the owner, live:
 // "the puppet's walk animation is lagging").
 buffer_write(_b, buffer_u16, floor(abs(objPlayer.image_index) * 100) mod 65535);
+// **Is `objPlayer.image_index` really the walk clock?** Measured live (M5i, 2026-10-22), and the
+// answer decides what the puppet should be animated by.
+//
+// The owner's own wire log carries the index at **0.22 per packet**, i.e. 4.4 units a second, so a
+// six-unit cycle takes **1.36 s**. The distance arithmetic in this file says a walk cycle should
+// be about **0.32 s**, and 18.75 / 4.4 = **4.26** - suspiciously close to `SPAWN_ANIM_SPEED 4`,
+// which is the sort of coincidence this project has been wrong about before, so it is measured
+// rather than assumed. One line, once every two seconds, while the player is actually moving:
+//
+//     idx <the index> d <what it grew by since the last line> px <how far the player moved> rate <px per index-unit>
+//
+// If `rate` comes out near **4.76 px per index-unit** (the old walking measurement), the index
+// **is** the walk clock and the wire number is right. If it comes out near **19 px per index-unit**,
+// the index runs four times too slowly to be the walk and the puppet has been animated off the
+// wrong clock - the thing that would look like "not smooth" more than any packet stepping.
+if (global.coopPeerAlive) {
+    global.coopIdxProbeTick += 1;
+    if (global.coopIdxProbeTick >= 180) {      // ~2 s at 60 fps
+        global.coopIdxProbeTick = 0;
+        var _ip_idx = abs(objPlayer.image_index) * 100;
+        var _ip_px = point_distance(objPlayer.x, objPlayer.y,
+                                    global.coopIdxProbeX, global.coopIdxProbeY);
+        var _ip_di = _ip_idx - global.coopIdxProbeIdx;
+        if (_ip_di < 0) _ip_di += 600;          // the cycle is six units = 600 hundredths
+        var _ip_rate = _ip_di > 0.001 ? (_ip_px / (_ip_di / 100)) : -1;
+        var _ip_line = "idx probe: idx " + string(floor(_ip_idx))
+                     + " d " + string(floor(_ip_di))
+                     + " px " + string(floor(_ip_px))
+                     + " rate " + string(floor(_ip_rate * 100) / 100) + " px/unit"
+                     + " moved " + string(global.coopLastMoved ? 1 : 0);
+        Trace(_ip_line);
+        CoopSendDebugLine(_ip_line);
+        global.coopIdxProbeIdx = _ip_idx;
+        global.coopIdxProbeX   = objPlayer.x;
+        global.coopIdxProbeY   = objPlayer.y;
+    }
+}
 buffer_write(_b, buffer_u8, objPlayer.room);
 // The item in the peer's hand, as an item id (-1 = none). The far end turns it into a
 // sprite with the game's own `ItemGet(id, ItemData.Sprite)`.
@@ -2239,6 +2276,27 @@ switch (_cmd) {
             global.coopRollStep = 0.25;
         }
         if (global.coopPeerStep > _ps_step + 0.001) global.coopPeerRepeat += 1;
+        // **How fast the index is running, measured between two packets** (M5i). This is what
+        // lets the puppet keep animating on the frames with no packet instead of freezing on the
+        // last value: see the draw handler. A wrap (`5.x -> 0.x`) is one whole cycle backwards,
+        // not a huge negative rate, so it is added back before the difference is taken.
+        var _ps_step_now = current_time;
+        if (global.coopPeerStepPrevAt > 0) {
+            var _ps_dstep = _ps_step - global.coopPeerStepPrev;
+            if (_ps_dstep < 0) _ps_dstep += global.coopStepMax + 1;   // a wrap is a cycle, not a jump
+            var _ps_step_dt = _ps_step_now - global.coopPeerStepPrevAt;
+            if (_ps_step_dt > 0) {
+                global.coopPeerStepRate = _ps_dstep / _ps_step_dt;    // units per millisecond
+                // Furthest a real walk can run: the index moves ~19 units a second (the draw
+                // handler's arithmetic), so 0.02 a millisecond is the healthy ceiling. A stalled
+                // packet must not carry a wild rate into the frames that follow it.
+                if (global.coopPeerStepRate > 0.05) global.coopPeerStepRate = 0.05;
+                if (global.coopPeerStepRate < 0)    global.coopPeerStepRate = 0;
+            }
+        }
+        global.coopPeerStepPrev   = _ps_step;
+        global.coopPeerStepPrevAt = _ps_step_now;
+        global.coopPeerStepAt     = _ps_step_now;
         global.coopPeerStep = _ps_step;
         global.coopPeerWalking = (_ps_name == "walk");
         break;

@@ -71,6 +71,18 @@ if (_spr <= 0) {
 // See CoopStandSpot.
 CoopStandSpot(global.coopPeer.x, global.coopPeer.y, 0);
 
+// **How long this frame lasted** - measured once, at the top, so **every** timed thing in this
+// handler uses the same clock. It used to be computed inside the position block, which only runs
+// while the puppet still has a gap to close: on the frames where the puppet had arrived, `_dt`
+// was whatever the last moving frame left behind, and the **roll** (which turns by `_dt`) froze
+// mid-turn. The owner's "sometimes turns diagonally" is partly this - a spin that stopped at an
+// angle and stayed there.
+var _now = current_time;
+var _dt = global.coopDrawAt > 0 ? (_now - global.coopDrawAt) : 16;
+global.coopDrawAt = _now;
+if (_dt < 1) _dt = 1;
+if (_dt > 100) _dt = 100;
+
 // **The puppet's own position, which walks toward the reported one.**
 //
 // The positions arrive twenty times a second and the game draws sixty times a second, so
@@ -95,11 +107,6 @@ if (_dist > 0.01) {
     // How far this frame may go: the peer's own speed, over the time since the last
     // frame. The step is capped so a lost packet cannot send the puppet across the
     // island, and the puppet never goes past the target.
-    var _now = current_time;
-    var _dt = global.coopDrawAt > 0 ? (_now - global.coopDrawAt) : 16;
-    global.coopDrawAt = _now;
-    if (_dt < 1) _dt = 1;
-    if (_dt > 100) _dt = 100;
     var _step = global.coopPeerSpeed * _dt;
     if (_step > 24) _step = 24;
     if (_step < 0) _step = 0;
@@ -168,7 +175,36 @@ if (_face == 0) _face = 1;
 // integer threw the timer away and stuttered; running a *local cycle* of twelve frames made
 // the puppet walk at half the player's rate; a **division by two** did the same; and
 // **interpolating** the frame carried it a packet behind the player.
-var _frame = floor(global.coopPeerStep);
+//
+// **M5i: the index is now *continued* between packets, and that is a different thing from all
+// four of those.** The packet says the value *and* how fast it is running (the reader measures
+// the rate between two packets), so on the two frames in three with no packet the puppet keeps
+// moving at the peer's own last measured rate instead of freezing on the last value and jumping
+// when the next arrives - which is the stepping the owner saw.
+//
+// It is a continuation for at most one packet interval, not a clock of its own: it is
+// **clamped** so it can never run ahead of where the peer could be, it starts from the peer's
+// own value the moment a packet lands, and a wrap adds the cycle back so the join at the top is
+// seamless. The failing "local cycle" *invented* a twelve-unit clock and drifted; this one
+// borrows the peer's rate and is re-based every packet.
+var _step_now = global.coopPeerStep;
+if (global.coopPeerStepRate > 0 && global.coopPeerStepAt > 0) {
+    var _age = _now - global.coopPeerStepAt;
+    if (_age > 0) {
+        // Never run more than one packet interval ahead of the last packet: `_age` is already
+        // bounded by the reader's own cadence, but a stalled packet must not extrapolate.
+        if (_age > 100) _age = 100;
+        _step_now += global.coopPeerStepRate * _age;
+        // Wrap into the cycle, so a continuation past the top comes back at the bottom. `mod` and
+        // not a loop: the add is clamped (rate <= 0.05/ms, age <= 100 ms), so the value is at
+        // most one cycle ahead and one modulo settles it. (`while` is proven in this loader -
+        // the land and structure snapshot batches use it live - but a loop here would need a
+        // bound that is a guess, and the modulo needs none.)
+        var _cycle = global.coopStepMax + 1;
+        if (_step_now >= _cycle) _step_now = _step_now mod _cycle;
+    }
+}
+var _frame = floor(_step_now);
 if (_frame < 0) _frame = 0;
 if (_frame > global.coopStepMax) _frame = global.coopStepMax;
 

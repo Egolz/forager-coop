@@ -11,7 +11,10 @@ if (keyboard_check_pressed(vk_f9)) CoopDumpStructures();
 if (keyboard_check_pressed(vk_f10)) CoopProbeWorld();
 if (keyboard_check_pressed(vk_f11)) CoopProbeApi();
 if (keyboard_check_pressed(vk_f12)) CoopProbeSpot();
+// **F4 did not reach the mod** in the live run of 2026-10-21 - no report, no freeze, the
+// game alive - so the land probe is on **F2** as well, and F2 is the one to press.
 if (keyboard_check_pressed(vk_f4)) CoopProbeLand();
+if (keyboard_check_pressed(vk_f2)) CoopProbeLand();
 if (keyboard_check_pressed(vk_f3)) CoopProbeItems();
 
 // ---------------------------------------------------------------------------

@@ -910,8 +910,14 @@ class Peer:
             self.land_sent = True
             _cx = int(px // 16) * 16 + 8
             _cy = int(py // 16) * 16 + 8
-            self.send(snap_land(self.room, 1, 0, [(_cx, _cy)]))
-            log(f"-> SNAP_LAND 1 cell at {_cx},{_cy} (the cell under the player)")
+            # Two cells: the one under the player (which is land here, so the client's
+            # apply path does nothing with it) and **one at the far corner of the map**,
+            # which is water on any island this size. The second one is the one that
+            # matters: it makes the client call the game's own land function, and the
+            # snapshot's self-check then says whether the call actually put land there.
+            self.send(snap_land(self.room, 1, 0, [(_cx, _cy), (8, 8)]))
+            log(f"-> SNAP_LAND 2 cells at {_cx},{_cy} (under the player) and 8,8 "
+                f"(the map corner - water on any island this size)")
             self.send(snap_land(self.room, 1, 0, []))
             log("-> SNAP_LAND end of snapshot")
         # M3.2: the world's buildings. The mock has none, so it sends one - a furnace

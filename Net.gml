@@ -1355,7 +1355,7 @@ CoopSendDebugLine("Co-op: structure snapshot applied - " + string(global.coopStr
                   + " structures placed, " + string(_sr_removed) + " removed.");
 
 #define CoopProbeLand()
-// F13. **Does the game's own land function take absolute coordinates?**
+// F2 (and F4). **Does the game's own land function take absolute coordinates?**
 //
 // The land sync calls `PlaceLandfill(x, y)` with the host's cell - the same call and the
 // same arguments the reference mod makes. That is the best evidence available short of
@@ -1366,15 +1366,22 @@ CoopSendDebugLine("Co-op: structure snapshot applied - " + string(global.coopStr
 // So this is a **probe with an undo**. It finds a cell that is water, makes it land,
 // asks the **whole grid** what changed, and then puts the water back.
 //
-// What it reports:
-//   * the cell it tried and whether that cell is land afterwards (absolute);
-//   * every cell that became land anywhere on the grid - the other hypothesis, and the
-//     grid scan is what finds it wherever it landed;
-//   * whether the undo worked.
+// **It reports before it touches anything.** The first line goes out before the first
+// risky call, so a game that hangs or dies inside the game's own land code still leaves
+// a trace saying how far it got. The previous version reported only at the very end,
+// and the run that tried it produced no trace at all.
 //
-// The undo is the last step for a reason: a probe that leaves a 16x16 tile of land in the
-// owner's world is a probe that costs something.
+// **The undo only happens if the place took.** `RemoveLandfill` on a cell that is water
+// is exactly the call that must not be made, and the game's own land code is not
+// documented - it is the one place where a wrong guess costs a crash.
+//
+// Note the key: **F4 did not reach the mod** in the live run of 2026-10-21 (no report,
+// no freeze, the game alive) - so the probe is on **F2** as well, and F2 is the one to
+// press. The land snapshot's own apply path is the other half of the test: the mock can
+// send a cell that is water on this side, and the snapshot's self-check says whether the
+// call took.
 if (instance_exists(objPlayer)) {
+    CoopSendDebugLine("Co-op: land probe started.");
     // The grid before. 84 x 84 cells, sampled at the centres.
     var _pl_before = array_create(7056, 0);
     for (var _pl_y = 8; _pl_y < 1344; _pl_y += 16) {
@@ -1403,11 +1410,16 @@ if (instance_exists(objPlayer)) {
         }
     }
     if (_pl_tx < 0) {
-        Trace("Co-op: F13 land probe - no water cell within 640 px of the player.");
-        CoopSendDebugLine("Co-op: F13 land probe - no water cell within 640 px of the player.");
+        var _pl_none = "Co-op: land probe - no water cell within 640 px of the player.";
+        Trace(_pl_none);
+        CoopSendDebugLine(_pl_none);
     } else {
         var _pl_px = objPlayer.x;
         var _pl_py = objPlayer.y;
+        var _pl_start = "Co-op: land probe - will try " + string(_pl_tx) + "," + string(_pl_ty)
+                      + " (player at " + string(floor(_pl_px)) + "," + string(floor(_pl_py)) + ").";
+        Trace(_pl_start);
+        CoopSendDebugLine(_pl_start);
         with (objPlayer) { PlaceLandfill(_pl_tx, _pl_ty); }
         // What changed on the whole grid?
         var _pl_new = "";
@@ -1422,21 +1434,18 @@ if (instance_exists(objPlayer)) {
             }
         }
         var _pl_here = (WaterCollision(_pl_tx, _pl_ty) == 0) ? "yes" : "NO";
-        // The undo.
-        with (objPlayer) { RemoveLandfill(_pl_tx, _pl_ty); }
-        var _pl_gone = 0;
-        for (var _pl_y3 = 8; _pl_y3 < 1344; _pl_y3 += 16) {
-            for (var _pl_x3 = 8; _pl_x3 < 1344; _pl_x3 += 16) {
-                var _pl_c3 = floor(_pl_x3 / 16) + floor(_pl_y3 / 16) * 84;
-                if (WaterCollision(_pl_x3, _pl_y3) == 0 && _pl_before[_pl_c3] == 0) _pl_gone += 1;
-            }
+        // **The undo, but only if the place took.** Removing land that is not there is the
+        // one call that must not be made.
+        var _pl_undo = "skipped (the place did not take)";
+        if (_pl_here == "yes") {
+            with (objPlayer) { RemoveLandfill(_pl_tx, _pl_ty); }
+            _pl_undo = (WaterCollision(_pl_tx, _pl_ty) != 0) ? "worked" : "DID NOT WORK";
         }
-        var _pl_text = "Co-op: F13 land probe - tried " + string(_pl_tx) + "," + string(_pl_ty)
-                     + " (player at " + string(floor(_pl_px)) + "," + string(floor(_pl_py))
-                     + "); that cell is land now: " + _pl_here
+        var _pl_text = "Co-op: land probe - tried " + string(_pl_tx) + "," + string(_pl_ty)
+                     + "; that cell is land now: " + _pl_here
                      + "; cells that became land: " + string(_pl_count)
                      + (string(_pl_count) > 0 ? " at " + _pl_new : "")
-                     + "; after the undo, cells that are still new: " + string(_pl_gone) + ".";
+                     + "; the undo: " + _pl_undo + ".";
         Trace(_pl_text);
         CoopSendDebugLine(_pl_text);
     }

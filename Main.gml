@@ -44,7 +44,7 @@ enum CoopCmd {
     SNAP_STRUCT      = 18   // host -> client: a chunk of the world's structures
 }
 
-global.coopVersion  = "0.0.56-m3v";
+global.coopVersion  = "0.0.57-m3w";
 global.coopProtocol = 6;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);

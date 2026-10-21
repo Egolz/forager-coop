@@ -17,6 +17,26 @@ if (_type == network_type_connect) {
               + string(async_load[? "ip"]) + ":" + string(async_load[? "port"])
               + "), waiting for HELLO.");
     } else {
+        // The client's half of the connect. **The status is checked**, because a connect
+        // that failed produces this event too - and sending a HELLO into a dead socket
+        // looks like a protocol problem when it is a network one.
+        //
+        // `global.coopConnected` is set **here** and not when `network_connect` was called:
+        // it used to be set optimistically, which meant the mod believed it had a session
+        // before there was one, and could send a BYE down a connection that had never
+        // finished being set up.
+        var _cstatus = async_load[? "status"];
+        if (_cstatus != 0) {
+            Trace("Co-op: the connect to the host failed (status " + string(_cstatus) + ").");
+            if (global.coopSocket >= 0 && global.coopSocketOwned) {
+                network_destroy(global.coopSocket);
+            }
+            global.coopSocket      = -1;
+            global.coopSocketOwned = false;
+            global.coopConnected   = false;
+            return;
+        }
+        global.coopConnected = true;
         Trace("Co-op: connected to host, sending HELLO.");
         CoopSendHello();
     }

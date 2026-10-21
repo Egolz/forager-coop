@@ -501,7 +501,12 @@ class Peer:
                 return
             sig1, sig2, size = struct.unpack("<III", self.buf[:12])
             log(f"GM handshake: client sigs {sig1:#010x} {sig2:#010x} size={size}")
-            self.buf = self.buf[16:] if len(self.buf) >= 16 else self.buf[12:]
+            # The client's half of the handshake is **12 bytes** - two signatures and the
+            # size - so exactly 12 are consumed. The first version consumed 16 whenever the
+            # buffer happened to be that long, which ate four bytes of whatever came next:
+            # the client's HELLO, if it arrived in the same TCP segment. A frame that starts
+            # four bytes late does not parse, and the HELLO was simply never seen.
+            self.buf = self.buf[12:]
             self.sock.sendall(struct.pack("<III", HANDSHAKE_SV1, HANDSHAKE_SV2, 12))
             log("GM handshake complete (server side)")
             self.ready = True
@@ -533,9 +538,15 @@ class Peer:
                 return
             pre, hdr, plen = struct.unpack("<III", self.buf[:12])
             if pre != HANDSHAKE_PRE or hdr != 12:
-                log(f"!! bad frame header {pre:#010x} {hdr} raw={self.buf[:24].hex()}")
-                self.buf = b""
-                return
+                # **Resynchronise, do not throw the buffer away.** A frame whose header is
+                # not where it should be means the stream is out of step by some bytes -
+                # and dropping everything would lose every packet that comes after it, for
+                # ever. Skipping one byte and looking again costs a few iterations and
+                # finds the next frame.
+                log(f"!! bad frame header {pre:#010x} {hdr} - resynchronising "
+                    f"(raw={self.buf[:16].hex()})")
+                self.buf = self.buf[1:]
+                continue
             if len(self.buf) < 12 + plen:
                 return
             payload = self.buf[12:12 + plen]
@@ -1165,17 +1176,27 @@ def run_server(port: int) -> None:
             time.sleep(2)
     srv.listen(1)
     log(f"listening on 0.0.0.0:{port} - now press F6 in the game and enter 127.0.0.1")
-    conn, addr = srv.accept()
-    log(f"game connected from {addr[0]}:{addr[1]}")
-    reset_debug_file()
-    peer = Peer(conn, is_host=True)
+    # Serve one peer at a time, but **keep serving after it leaves**. The first version
+    # exited on the peer's BYE, which meant a second attempt to connect found a dead
+    # listener and failed - and that failure looked like the game could not connect, when
+    # in fact the first attempt had worked.
     while True:
-        peer.pump()
-        # The host side: confirm the client's placements and stream our own position. The
-        # client half of the protocol is what this exercises - the half a mock that is only
-        # ever a client can never reach.
-        peer.host_tick()
-        time.sleep(0.05)
+        conn, addr = srv.accept()
+        log(f"game connected from {addr[0]}:{addr[1]}")
+        reset_debug_file()
+        peer = Peer(conn, is_host=True)
+        try:
+            while True:
+                peer.pump()
+                # The host side: confirm the client's placements and stream our own position.
+                # The client half of the protocol is what this exercises - the half a mock
+                # that is only ever a client can never reach.
+                peer.host_tick()
+                time.sleep(0.05)
+        except SystemExit:
+            log("the peer left - waiting for the next one")
+        except OSError as exc:
+            log(f"the connection broke ({exc}) - waiting for the next one")
 
 
 def main() -> int:

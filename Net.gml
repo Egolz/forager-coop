@@ -179,14 +179,15 @@ global.coopSocketOwned = true;   // we made this one, so we must destroy it - se
 
 var _r = network_connect(global.coopSocket, _ip, global.coopPort);
 if (_r < 0) {
-    Trace("Co-op: connect to " + _ip + ":" + string(global.coopPort) + " FAILED.");
+    Trace("Co-op: connect to " + _ip + ":" + string(global.coopPort) + " FAILED (rc="
+          + string(_r) + ").");
     if (global.coopSocket >= 0) network_destroy(global.coopSocket);
     global.coopSocket      = -1;
     global.coopSocketOwned = false;
     exit;
 }
-global.coopConnected = true;
-Trace("Co-op: connecting to " + _ip + ":" + string(global.coopPort) + " ...");
+Trace("Co-op: connecting to " + _ip + ":" + string(global.coopPort)
+      + " - the connection is up when the async event says so.");
 
 #define CoopDisconnect(_why)
 if (!global.coopConnected && !global.coopIsHost) { Trace("Co-op: not connected."); exit; }

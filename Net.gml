@@ -298,13 +298,18 @@ if (!global.coopBodyTried) {
 // The search is a spiral over **cells**, so the answer lands on the lattice rather than
 // between two cells, and it is cached by the peer's cell: the peer standing still does not
 // make the host search every frame.
+//
+// The radius is **six cells** (96 px). Two was not enough: a peer standing in the middle of
+// a lake had no free cell within reach, so the host kept the position it was given and the
+// puppet stood in the water. Six cells finds ground around any ordinary pond, and the spiral
+// takes the **nearest** free cell, so the peer is only moved as far as it has to be.
 var _ss_key = string(floor(_x / 16)) + "," + string(floor(_y / 16));
 if (_ss_key != global.coopStandKey) {
     global.coopStandKey = _ss_key;
     var _ss_ox = floor(_x / 16) * 16 + 8;   // the cell's centre
     var _ss_oy = floor(_y / 16) * 16 + 8;
     var _ss_done = false;
-    for (var _ss_r = 0; _ss_r <= 2 && !_ss_done; _ss_r += 1) {
+    for (var _ss_r = 0; _ss_r <= 6 && !_ss_done; _ss_r += 1) {
         for (var _ss_dy = -_ss_r; _ss_dy <= _ss_r && !_ss_done; _ss_dy += 1) {
             for (var _ss_dx = -_ss_r; _ss_dx <= _ss_r && !_ss_done; _ss_dx += 1) {
                 // only the ring, except for the centre cell

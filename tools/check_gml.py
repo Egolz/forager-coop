@@ -188,6 +188,29 @@ def check_forbidden(where: str, text: str, problems: list[str]) -> None:
                             f"Use an `if` guard.")
 
 
+def check_key_constants(where: str, text: str, problems: list[str]) -> None:
+    """The game's key constants are a fixed list, and it stops at F12.
+
+    The loader resolves an unknown identifier against the **instance variables of the
+    game's own objects**, so a key constant that does not exist is not a compile error
+    in the mod's code - it is a runtime error in the game's, and the whole mod refuses
+    to load:
+
+        Execution error: [error] `101763`(WorldControl) does not have a variable
+        `vk_f13` called from Forager Coop/Events/OnStep.gml[L14,c28]
+
+    (live COMPILE, 2026-10-21 - the land probe was bound to F13, which GameMaker does
+    not have.) GameMaker's function keys are F1 to F12 and there is no F13, so this is
+    the one class of typo that a symbol-table check cannot catch: the `vk_*` names are
+    not in `data.win` at all, they are the engine's own constants. Hence this check.
+    """
+    for ln, line in enumerate(text.splitlines(), 1):
+        for m in re.finditer(r"\bvk_f(\d+)\b", line):
+            if int(m.group(1)) > 12:
+                problems.append(f"{where}:{ln}: `vk_f{m.group(1)}` - GameMaker has only "
+                                f"F1 to F12; the game refuses to load the mod over it")
+
+
 def define_arity(body: str) -> int:
     head = DEFINE.match(body)
     if head is None or head.group(2) is None:
@@ -412,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
         text = stripped[f]
         where = f.relative_to(here) if here in f.parents else f
         check_forbidden(str(where), text, problems)
+        check_key_constants(str(where), text, problems)
         blocks = find_defines(text)
         if not blocks:
             problems.append(f"{where}: no #define found")

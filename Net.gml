@@ -923,6 +923,11 @@ global.coopApplyingRemote = true;
 var _cs_new = instance_create_depth(floor(_x), floor(_y), floor(_depth), _cs_obj);
 _cs_new.structure = _sid;
 global.coopApplyingRemote = false;
+// **Remember it by id.** The structure event for this instance arrives a frame later, so the
+// flag above is already down by then - and the client answered the host's own structure with
+// an intent for it, which the host confirmed, and the game built a row of structures marching
+// to the right forever (live, 2026-10-21). The id is what tells the event "this one is ours".
+array_push(global.coopRemoteInstances, _cs_new);
 return _cs_new;
 
 #define CoopPendingRemoveAt(_pi)

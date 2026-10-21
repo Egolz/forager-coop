@@ -41,7 +41,7 @@ enum CoopCmd {
     RESOURCE_DESTROY = 16   // either way: a resource (tree/rock/...) was harvested
 }
 
-global.coopVersion  = "0.0.45-m3k";
+global.coopVersion  = "0.0.46-m3l";
 global.coopProtocol = 5;   // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -110,6 +110,11 @@ global.coopPeerName = "";        // what the peer called themselves ("peer" unti
 // can send is sent. `coopHelloAt` paces the retry, `coopHelloTries` bounds it.
 global.coopHelloAt   = 0;
 global.coopHelloTries = 0;
+// The instances we created from a host's mutation. The structure event for one of them arrives
+// a frame later, so the `coopApplyingRemote` flag is down by then - and the client must not
+// answer the host's own structure with an intent for it, or the two sides confirm each other
+// forever. See OnStructureSpawn.
+global.coopRemoteInstances = [];
 // M3.1: the body sprite is resolved by **name** (`sprPlayerIdle`), because the player's
 // instance reports `sprite_index` 0 - the live body probe of 2026-10-21 found the whole
 // instance chain (parEntity #20, objPlayer #22, parAlly #46) with a sprite index of 0, while

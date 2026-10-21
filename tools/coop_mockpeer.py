@@ -428,6 +428,12 @@ class Peer:
         self.seq = 0
         self.last_place_name = ""   # the name the client last built with
         self._last_host_pos = 0.0
+        self.host_spot: tuple[int, int] | None = None   # where the host stands
+        # The scripted resource destroy is **destructive**: it takes a tree out of the
+        # client's world. It is off by default, so the harness does not quietly wreck the
+        # owner's island; the offline end-to-end test turns it on, where there is no world to
+        # damage.
+        self.destroy_on_hello = False
         # Where the puppet **stands**. Picked once, when the mock first learns where the host
         # is, and then left alone - see tick().
         self.anchor: tuple[int, int] | None = None
@@ -501,12 +507,15 @@ class Peer:
                 return
             sig1, sig2, size = struct.unpack("<III", self.buf[:12])
             log(f"GM handshake: client sigs {sig1:#010x} {sig2:#010x} size={size}")
-            # The client's half of the handshake is **12 bytes** - two signatures and the
-            # size - so exactly 12 are consumed. The first version consumed 16 whenever the
-            # buffer happened to be that long, which ate four bytes of whatever came next:
-            # the client's HELLO, if it arrived in the same TCP segment. A frame that starts
-            # four bytes late does not parse, and the HELLO was simply never seen.
+            # The client's half of the handshake starts with 12 bytes. The **game** sends four
+            # more, the mock's own client sends only the twelve - so the four are taken only
+            # when what follows is not the start of a frame. Guessing instead (always twelve,
+            # or always sixteen) either leaves four stray bytes in the stream or eats four
+            # bytes of the HELLO that followed in the same TCP segment, and in both cases the
+            # first packet after the handshake is lost.
             self.buf = self.buf[12:]
+            if len(self.buf) >= 4 and self.buf[:4] != HANDSHAKE_PRE:
+                self.buf = self.buf[4:]
             self.sock.sendall(struct.pack("<III", HANDSHAKE_SV1, HANDSHAKE_SV2, 12))
             log("GM handshake complete (server side)")
             self.ready = True
@@ -590,8 +599,9 @@ class Peer:
             log("-> DROP item #0 x3 at 640,704")
             self.send(pickup(8, 640, 704, 0))
             log("-> PICKUP item #0 at 640,704")
-            self.send(resource_destroy(8, 512, 640, 5))
-            log("-> RESOURCE_DESTROY obj#5 at 512,640")
+            if self.destroy_on_hello:
+                self.send(resource_destroy(8, 512, 640, 5))
+                log("-> RESOURCE_DESTROY obj#5 at 512,640")
             self.handshaken = True
         elif name == "WELCOME" and not self.is_host:
             if pkt["protocol"] != PROTOCOL:
@@ -698,15 +708,19 @@ class Peer:
             log(f"-> MUTATION_PLACE seq={self.seq} '{pkt['structure']}' at "
                 f"{pkt['x']},{pkt['y']} (confirming the client's request)")
 
-            # And a second one the client did **not** ask for, at the next cell. This is
-            # the visible proof that the host drives the client's world: the player sees a
-            # structure appear that they did not build.
+            # And a second one the client did **not** ask for. This is the visible proof that
+            # the host drives the client's world: the player sees a structure appear that
+            # they did not build.
+            #
+            # It goes **four cells** away, not one: a structure's sprite is wider than the
+            # 16 px cell, so one cell over would put the two on top of each other and the
+            # owner would read it as a placement bug.
             self.seq += 1
             self.send(mutation_place(self.seq, 0, pkt["room"],
-                                     pkt["x"] + 16, pkt["y"], -(pkt["y"]),
+                                     pkt["x"] + 64, pkt["y"], -(pkt["y"]),
                                      pkt["structure"]))
             log(f"-> MUTATION_PLACE seq={self.seq} '{pkt['structure']}' at "
-                f"{pkt['x'] + 16},{pkt['y']} (one the client did not ask for)")
+                f"{pkt['x'] + 64},{pkt['y']} (one the client did not ask for)")
         elif name == "INTENT_PLACE":
             log(f"   (the client asked to build '{pkt['structure']}' at {pkt['x']},{pkt['y']})")
         elif name == "MUTATION_PLACE":
@@ -739,15 +753,22 @@ class Peer:
         """What the host side streams.
 
         The host tells the client where it is, so the client can draw it. The mock is not a
-        game and has no player of its own, so it stands next to the client - which is enough
-        to exercise the client's draw path, and is honest about what it is.
+        game and has no player of its own, so it picks a spot **once**, next to the client when
+        the client appears, and then **stands still**.
+
+        It used to stand next to the client all the time, which made it look glued to the
+        camera - the owner's own words. A peer that is not told to walk does not walk, and
+        the host is no exception.
         """
         now = time.time()
         if not self.handshaken or now - self._last_host_pos < 0.1:
             return
         self._last_host_pos = now
-        px, py = self.player if self.player else (620, 620)
-        self.send(pos(px + 48, py, angle=0, facing=1, sprite=-1, image=0, room=self.room))
+        if self.host_spot is None:
+            px, py = self.player if self.player else (620, 620)
+            self.host_spot = (px - 96, py)
+        hx, hy = self.host_spot
+        self.send(pos(hx, hy, angle=0, facing=1, sprite=-1, image=0, room=self.room))
 
     def choose_structure(self) -> str | None:
         if self.place_wanted:
@@ -1160,7 +1181,7 @@ def _drain(s: socket.socket, seconds: float) -> bytes:
     return data
 
 
-def run_server(port: int) -> None:
+def run_server(port: int, destroy: bool = False) -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # The port may still be held by a game that is hosting and has not let go of it yet, so
@@ -1185,6 +1206,7 @@ def run_server(port: int) -> None:
         log(f"game connected from {addr[0]}:{addr[1]}")
         reset_debug_file()
         peer = Peer(conn, is_host=True)
+        peer.destroy_on_hello = destroy
         try:
             while True:
                 peer.pump()
@@ -1216,6 +1238,11 @@ def main() -> int:
                     help="client mode: keep retrying the connection for this many seconds")
     ap.add_argument("--for", dest="run_for", type=float, default=0.0,
                     help="client mode: exit after this many seconds (0 = run until stopped)")
+    ap.add_argument("--destroy", action="store_true",
+                    help="server mode: also script a RESOURCE_DESTROY on connect. It takes a "
+                         "tree out of the client's world, so it is off by default; the "
+                         "offline end-to-end test turns it on, where there is no world to "
+                         "damage")
     args = ap.parse_args()
     place = "" if args.no_place else args.place
     try:
@@ -1227,7 +1254,7 @@ def main() -> int:
         elif args.mode == "probe":
             run_probe(args.host, args.port, settle=4.0)
         else:
-            run_server(args.port)
+            run_server(args.port, destroy=args.destroy)
     except KeyboardInterrupt:
         log("bye")
     return 0

@@ -588,6 +588,8 @@ class Peer:
         self.moving = False
         self.last_px = -1
         self.last_py = -1
+        self.angle = 0
+        self.spin = False
         self.host_spot: tuple[int, int] | None = None   # where the host stands
         # The scripted loot is **destructive in a live world** - a drop at a fixed tile makes
         # the game spawn a pickup inside whatever stands there, and the tree it was in goes.
@@ -982,7 +984,13 @@ class Peer:
         else:
             self.moving = False
         self.frame = (self.frame + 1) % 4 if self.moving else 0
-        self.send(pos(hx, hy, angle=0, facing=1,
+        # **The angle.** Forager's roll has no sprite of its own - the player's assets are
+        # only idle and walk plus the costume variants - so a roll is the player spinning,
+        # and the spin is the angle. `--spin` turns the puppet round, which is how that
+        # path can be seen without a second human.
+        if self.spin:
+            self.angle = (self.angle + 15) % 360
+        self.send(pos(hx, hy, angle=self.angle, facing=1,
                       sprite="walk" if self.moving else "idle", image=self.frame,
                       room=self.room, hold=self.hold_item))
         # M3.1: the world snapshot. The mock has no world, so it sends the one cell it
@@ -1444,7 +1452,8 @@ def _drain(s: socket.socket, seconds: float) -> bytes:
 
 
 def run_server(port: int, loot: bool = False, echo: bool = False,
-               land: bool = False, struct: bool = False, hold: int = 65535) -> None:
+               land: bool = False, struct: bool = False, hold: int = 65535,
+               spin: bool = False) -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # The port may still be held by a game that is hosting and has not let go of it yet, so
@@ -1474,6 +1483,7 @@ def run_server(port: int, loot: bool = False, echo: bool = False,
         peer.land_on_hello = land
         peer.struct_on_hello = struct
         peer.hold_item = hold
+        peer.spin = spin
         try:
             while True:
                 peer.pump()
@@ -1529,6 +1539,10 @@ def main() -> int:
                     help="server mode: the item id the peer holds (65535 = none). The far "
                          "end draws it with the game's own ItemGet(id, ItemData.Sprite) - "
                          "item 0 is wood")
+    ap.add_argument("--spin", action="store_true",
+                    help="server mode: turn the puppet round and round. Forager's roll has "
+                         "no sprite of its own - the player spins - so this is what a roll "
+                         "looks like on the other side")
     args = ap.parse_args()
     place = "" if args.no_place else args.place
     try:
@@ -1541,7 +1555,7 @@ def main() -> int:
             run_probe(args.host, args.port, settle=4.0)
         else:
             run_server(args.port, loot=args.loot, echo=args.echo, land=args.land,
-                       struct=args.struct, hold=args.hold)
+                       struct=args.struct, hold=args.hold, spin=args.spin)
     except KeyboardInterrupt:
         log("bye")
     return 0

@@ -277,6 +277,15 @@ global.coopIdleTicks      = 0;
 global.coopDeadTicks      = 0;
 global.coopIdleUnitsAdded = 0;
 global.coopIdleDtSum      = 0;
+// M5k7b: **the raw `current_time` gap, unclamped**, plus a count of the *outermost* draw calls. Two
+// independent accumulators disagree about elapsed time (`OnStep` sums ~18 ms per call at ~44 calls/s,
+// which is real; the idle branch sums ~19 ms per call at ~290 calls/s, which would be 5.6x wall clock),
+// and a sum larger than real time can only mean **the same millisecond is being counted several
+// times**. `coopOuterTicks` counts the handler's own entry, so "called 290x/s" and "entered 60x/s"
+// can be told apart.
+global.coopDtRawSum   = 0;
+global.coopDtRawLast  = 0;
+global.coopOuterTicks = 0;
 // Where the peer is actually drawn. The host decides, because the host is the side that
 // knows the world - a peer with no physics (the mock) reports a position inside a tree or in
 // the water, and the host pulls it onto ground a body could stand on.

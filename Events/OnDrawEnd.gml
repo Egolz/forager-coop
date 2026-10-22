@@ -39,7 +39,7 @@
 // block runs before the exits and `_dt` is computed after them.
 global.coopDrawCount += 1;
 global.coopDrawMsSum += global.coopLastDt;
-
+global.coopOuterTicks += 1;   // M5k7b: every entry into the handler, before any exit
 if (!global.coopPeerAlive || !global.coopPeer.seen) exit;
 if (!instance_exists(objPlayer)) exit;
 if (objPlayer.room != global.coopPeer.room) exit;
@@ -131,6 +131,16 @@ CoopStandSpot(global.coopPeer.x, global.coopPeer.y, 0);
 // angle and stayed there.
 var _now = current_time;
 var _dt = global.coopDrawAt > 0 ? (_now - global.coopDrawAt) : 16;
+// **M5k7: keep the UNCLAMPED gap, because `_dt` alone cannot say which clock is wrong.** The
+// measurement says the idle branch runs **290x/s** while the sum of its `_dt` is **22750 ms over
+// 4094 ms** - a sum *larger* than wall-clock time, which is impossible if `_dt` is real milliseconds
+// and the handler is called 290 times a second (that would need ~19 ms between calls, i.e. 52/s). The
+// two numbers cannot both be right, so both raw inputs are recorded here: `current_time` at this draw
+// and at the previous one, plus the running minimum and maximum gap seen. A `min` of 0 with 290 calls
+// a second would mean `current_time` only ticks once per *frame* while the handler is called per
+// *view* or per *room*, and the same millisecond is being counted many times.
+global.coopDtRawSum += _now - global.coopDrawAt;   // before clamping, and before the first-call guard
+global.coopDtRawLast = _now;
 global.coopDrawAt = _now;
 if (_dt < 1) _dt = 1;
 // **M5k5: the 100 ms ceiling was capping the *whole animation* at a tenth speed.**

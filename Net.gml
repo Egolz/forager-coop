@@ -1003,6 +1003,22 @@ if (global.coopBobArmed) {
                        + " -> " + string(floor(global.coopIdleUnitsAdded / _bs_s * 100) / 100) + " frames/s";
         Trace(_bs_branch);
         CoopSendDebugLine(_bs_branch);
+        // M5k7b: **the clock audit.** `outer` is every entry into the handler, `enter` is entries that
+        // got past the room/alive exits, and `raw` is the unclamped `current_time` gap summed over
+        // them. If `outer` is ~290/s while `enter` is too, and `raw` is still 5.6x the wall clock, then
+        // `current_time` does not advance once per call and the same millisecond is counted many
+        // times - which is the only way a sum of gaps can exceed the time it was measured over.
+        var _bs_clock = "bob clock over " + string(floor(_bs_ms)) + " ms:"
+                      + " outer " + string(floor(global.coopOuterTicks / _bs_s * 10) / 10) + "/s"
+                      + ", enter " + string(floor(global.coopDrawCount / _bs_s * 10) / 10) + "/s"
+                      + ", walk " + string(floor(global.coopWalkTicks / _bs_s * 10) / 10) + "/s"
+                      + " | raw gap sum " + string(floor(global.coopDtRawSum)) + " ms"
+                      + " (wall " + string(floor(_bs_ms)) + " ms, ratio "
+                      + string(floor(global.coopDtRawSum / _bs_ms * 100) / 100) + "x)";
+        Trace(_bs_clock);
+        CoopSendDebugLine(_bs_clock);
+        global.coopDtRawSum   = 0;
+        global.coopOuterTicks = 0;
         global.coopWalkTicks      = 0;
         global.coopIdleTicks      = 0;
         global.coopDeadTicks      = 0;

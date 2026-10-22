@@ -117,6 +117,72 @@ global.coopTick += 1;
 // the index **stopped dead while standing** (`imgidx 4.20` five times in a row), so this also has to
 // separate "standing" from "walking": the two are summed separately.
 //
+// ============================================================================
+// **M5k8: the puppet's idle bob is advanced HERE, once per game STEP.**
+//
+// The F3 clock audit settled it with a number:
+//
+//     bob clock over 4121 ms: outer 505.70/s, enter 122.70/s
+//       | raw gap sum 61377 ms (wall 4121 ms, ratio 14.89x)
+//
+// **Every term in the draw handler's arithmetic was right and the clock it used was not.**
+// `current_time` ticks far more slowly than the draw handler is called - the handler runs ~505x/s
+// and the gap sum came out **15x** the wall clock, so seven calls in eight see the *same*
+// millisecond. The `if (_dt < 1) _dt = 1;` guard then counts that shared millisecond as a whole 1 ms
+// each time, and a rate expressed in milliseconds means nothing at all.
+//
+// The one clock in this mod that has never lied is the **step**: the same probe reads
+// `dt 17.97` on ~44-58 steps/s every time, because a step is a step. So the bob is advanced here -
+// `_idle_units` is per millisecond, so one step is `_idle_units * step_ms`, where `step_ms` is
+// **measured from the gap between steps** (below). Standing and the walk-off are the
+// same test the draw handler uses (`coopPeerWalking`); the draw handler now only **reads**
+// `coopIdleFrameF` and picks the frame.
+// ============================================================================
+// **M5k8: measure how long one game step really is.** This is the conversion the bob needs, and
+// it is measured rather than assumed for the same reason the bob moved here: the two clocks in
+// this build disagree by an order of magnitude, so any "steps per second" taken from the frame
+// rate is wrong. `current_time` is honest at *step* rate (every probe reads `dt 17.97`), so the
+// gap between consecutive steps is a real step length; it is smoothed because a single hitch
+// (world load, a save) must not swing the animation rate.
+if (global.coopStepAt > 0) {
+    var _sm_raw = current_time - global.coopStepAt;
+    if (_sm_raw > 0 && _sm_raw < 1000) {
+        global.coopStepMsRaw = _sm_raw;
+        global.coopStepMs = global.coopStepMs <= 0 ? _sm_raw
+                                                   : (global.coopStepMs * 0.9 + _sm_raw * 0.1);
+    }
+}
+global.coopStepAt = current_time;
+
+if (global.coopPeerAlive && !global.coopPeerWalking) {
+    var _ib_n = sprite_get_number(global.coopIdleSprite);
+    if (_ib_n < 1) _ib_n = 6;                       // sprPlayerIdle has six frames (live)
+    var _ib_units = global.coopPeerStepRate;        // units per millisecond, measured from the peer
+    if (_ib_units <= 0.0005) {
+        // `-1`-style meaning: no peer rate, so the **period** is the source of truth - one whole bob
+        // takes `coopIdlePeriodS` seconds - and the frame count converts it, so the only number to
+        // tune is the period the owner can actually see.
+        var _ib_period_ms = global.coopIdlePeriodS * 1000;
+        if (_ib_period_ms <= 1) _ib_period_ms = 500;
+        _ib_units = _ib_n / _ib_period_ms;
+    }
+    // One game step, in milliseconds - **measured here, not assumed.** `fps` was the first
+    // thought and it is the wrong one: it is the *draw* rate, and this build's draw handler runs
+    // ~505x/s while the step runs ~44-58x/s, so `1000 / fps` would be off by an order of
+    // magnitude and would reintroduce exactly the bug being fixed. The step is timed against the
+    // same `current_time` that the `idx probe` has been reading honestly all along (`dt 17.97` at
+    // 44-58 steps/s), smoothed over a window so one hitch does not swing the rate: the raw gap is
+    // kept in `coopStepMsRaw`, and `coopStepMs` is an exponential average of it.
+    var _ib_step_ms = global.coopStepMs;
+    if (_ib_step_ms <= 0) _ib_step_ms = 1000 / 60;   // first steps, before the average exists
+    global.coopIdleFrameF += _ib_units * _ib_step_ms;
+    if (global.coopIdleFrameF >= _ib_n) global.coopIdleFrameF = global.coopIdleFrameF mod _ib_n;
+    if (global.coopIdleFrameF < 0) global.coopIdleFrameF = 0;
+    global.coopIdleTicks += 1;
+    global.coopIdleUnitsAdded += _ib_units * _ib_step_ms;
+    global.coopIdleDtSum += _ib_step_ms;
+}
+
 // `coopIdxUnitsStand` / `coopIdxUnitsWalk` are hundredths gained, `coopIdxStepsStand` /
 // `coopIdxStepsWalk` are the steps they took, and the probe line reports each as units/step.
 if (global.coopPeerAlive) {

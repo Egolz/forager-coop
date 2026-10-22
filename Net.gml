@@ -995,12 +995,17 @@ if (global.coopBobArmed) {
         // second with an average `_dt` of `idt` ms, the frames it adds each second are
         // `idle/s * idt * rate` - and that product has to equal the cycles the puppet was measured at.
         var _bs_branch = "bob branches over " + string(floor(_bs_ms)) + " ms:"
-                       + " walk " + string(floor(global.coopWalkTicks / _bs_s * 10) / 10) + "/s"
-                       + ", idle " + string(floor(global.coopIdleTicks / _bs_s * 10) / 10) + "/s"
+                       + " step idle " + string(floor(global.coopIdleTicks / _bs_s * 10) / 10) + "/s"
+                       + ", draw walk " + string(floor(global.coopWalkTicks / _bs_s * 10) / 10) + "/s"
+                       + ", draw idle " + string(floor(global.coopIdleDraws / _bs_s * 10) / 10) + "/s"
                        + ", dead " + string(floor(global.coopDeadTicks / _bs_s * 10) / 10) + "/s"
                        + " | idle added " + string(floor(global.coopIdleUnitsAdded * 100) / 100)
-                       + " frames, dt sum " + string(floor(global.coopIdleDtSum)) + " ms"
-                       + " -> " + string(floor(global.coopIdleUnitsAdded / _bs_s * 100) / 100) + " frames/s";
+                       + " frames -> " + string(floor(global.coopIdleUnitsAdded / _bs_s * 100) / 100)
+                       + " frames/s | step " + string(floor(global.coopStepMs * 100) / 100) + " ms"
+                       + " (raw " + string(global.coopStepMsRaw) + " ms = "
+                       + string(floor(1000 / max(1, global.coopStepMs) * 10) / 10) + " steps/s)"
+                       + " -> expect " + string(floor(global.coopIdleUnitsAdded / _bs_s / 6 * 100) / 100)
+                       + " bobs/s";
         Trace(_bs_branch);
         CoopSendDebugLine(_bs_branch);
         // M5k7b: **the clock audit.** `outer` is every entry into the handler, `enter` is entries that
@@ -1024,6 +1029,7 @@ if (global.coopBobArmed) {
         global.coopDeadTicks      = 0;
         global.coopIdleUnitsAdded = 0;
         global.coopIdleDtSum      = 0;
+        global.coopIdleDraws      = 0;
     }
 }
 

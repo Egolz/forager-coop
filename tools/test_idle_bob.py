@@ -32,12 +32,26 @@ genuinely bobs differently is matched; the period is the fallback and the defaul
 
 What this file pins down:
 
+  0. **M5k8: the bob is advanced in `OnStep`, not in `OnDrawEnd`** - because the draw handler in this
+     build runs ~505x/s while `current_time` ticks ~15 ms, so a millisecond-based rate in that event
+     is meaningless (the audit read `raw gap sum 61377 ms over 4121 ms = 14.89x`). This is asserted
+     against the source, because it is a **structure**, not a number.
   1. **Sprite 0 is a real answer** on all three paths (resolve, draw, frame count).
   2. **The period is 0.5 s**, and the rate in units/ms is derived from it and the frame count - not a
      constant.
   3. **The bracketing reports are explained**: 0.17 s cycling at ~6/s and 0.67 s at ~1.5/s were both
      real measurements, which is why the target sits between them and not at either.
+  4. **The step length is measured, never `fps`** - `fps` is the draw rate in this build and would be
+     wrong by an order of magnitude.
 """
+import re
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+MOD = HERE.parent
+ON_STEP = MOD / "Events" / "OnStep.gml"
+ON_DRAW_END = MOD / "Events" / "OnDrawEnd.gml"
+
 IDLE_PERIOD_S = 0.5            # the owner's measurement: ~2 bobs a second
 IDLE_FRAMES = 6               # sprPlayerIdle's own frame count (live)
 TOO_FAST_CYCLE_S = 0.17       # image_speed 0.60 -> ~6/s, the owner: "too fast"
@@ -64,8 +78,40 @@ def bobs_per_second(cycle_s: float) -> float:
     return float("inf") if cycle_s <= 0 else 1.0 / cycle_s
 
 
+def check_bob_lives_in_on_step(failures: list) -> None:
+    """M5k8: assert the bob is advanced in `OnStep` and the step length is measured, not `fps`.
+
+    This is a check on the **structure** because the bug was structural: the arithmetic in the draw
+    handler was right, the clock it used was not. Comments are stripped first, so a mention in prose
+    (the file quotes `fps` and `1000 / fps` while explaining why they are wrong) cannot pass the test.
+    """
+    step_src = ON_STEP.read_text(encoding="utf-8")
+    draw_src = ON_DRAW_END.read_text(encoding="utf-8")
+    # Strip `//` comments so explanations cannot satisfy a check about code.
+    step_code = "\n".join(line.split("//")[0] for line in step_src.splitlines())
+    draw_code = "\n".join(line.split("//")[0] for line in draw_src.splitlines())
+
+    # 1. The idle frame counter is *written* in OnStep.
+    if not re.search(r"coopIdleFrameF\s*\+=", step_code):
+        failures.append("OnStep no longer advances coopIdleFrameF - the step clock is gone")
+    # 2. and only *read* (never advanced) in OnDrawEnd.
+    if re.search(r"coopIdleFrameF\s*\+=", draw_code):
+        failures.append("OnDrawEnd advances coopIdleFrameF again - it uses the 14.89x clock")
+    if "coopIdleFrameF" not in draw_code:
+        failures.append("OnDrawEnd no longer reads coopIdleFrameF - nothing would bob")
+    # 3. The step length is measured, and `fps` is not called as a variable anywhere in code.
+    if "coopStepMs" not in step_code:
+        failures.append("OnStep does not use a measured step length (coopStepMs)")
+    if re.search(r"(?<![\w.])fps(?![\w(])", step_code):
+        failures.append("OnStep uses `fps` - it is the draw rate here, not the step rate")
+    print("structure: bob advanced in OnStep, read in OnDrawEnd, step length measured (no `fps`)")
+
+
 def main() -> int:
     failures = []
+
+    # 0. M5k8: where the clock lives, and that it is measured.
+    check_bob_lives_in_on_step(failures)
 
     # 1. Sprite 0 is the idle body, and a `> 0` test is what deleted it three times over.
     idle_body_index = 0

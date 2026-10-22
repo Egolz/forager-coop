@@ -313,33 +313,17 @@ if (_walking) {
     if (global.coopPeerFrameF >= _cyc) global.coopPeerFrameF = global.coopPeerFrameF mod _cyc;
     if (global.coopPeerFrameF < 0) global.coopPeerFrameF = 0;
 } else if (_idle_anim) {
-    // The idle body's bob. `_spr` is **0** here (that is `sprPlayerIdle`), so a `> 0` guard would
-    // turn the bob off - the exact regression the owner reported. `sprite_get_number` takes 0 fine.
-    var _idle_n = sprite_get_number(_spr);
-    if (_idle_n < 1) _idle_n = 1;
-    // -1 means the peer did not report a rate, so the **period** drives it: a whole cycle takes
-    // `_COOP_IDLE_PERIOD_S`, whatever the sprite's frame count is. One number to tune, and it is the
-    // number the owner can see (bobs per second), not a rate that has to be re-derived each time.
-    var _idle_units = _IDLE_UNITS;
-    if (_idle_units < 0) {
-        var _period_ms = _COOP_IDLE_PERIOD_S * 1000;
-        if (_period_ms <= 1) _period_ms = 500;
-        _idle_units = _idle_n / _period_ms;
-    }
-    // **M5k7: count the branch itself.** The F3 measurement says the puppet bobs 0.18/s where the
-    // rate asks for 2/s - a factor of 11 - and the arithmetic inside this branch is provably right
-    // (`6 / 500 * 16.7 * 60 = 12 frames/s = 2 cycles/s`). The only remaining place a factor can hide
-    // is **how often this branch is entered at all**, so it is counted, with the units it added and
-    // the `_dt` it was given: if the branch runs 60x/s and the rate is right, the total is right; if
-    // it runs ~5x/s, the answer is that the draw handler is mostly taking a *different* path - and
-    // which path can be told from the counts of the other two branches beside it.
-    global.coopIdleTicks += 1;
-    global.coopIdleUnitsAdded += _idle_units * _dt;
-    global.coopIdleDtSum += _dt;
-    // **end M5k7**
-    global.coopIdleFrameF += _idle_units * _dt;
-    if (global.coopIdleFrameF >= _idle_n) global.coopIdleFrameF = global.coopIdleFrameF mod _idle_n;
-    if (global.coopIdleFrameF < 0) global.coopIdleFrameF = 0;
+    // **M5k8: the idle frame is no longer advanced here - OnStep does it now.** The audit read
+    // `outer 505.70/s, enter 122.70/s, raw gap sum 61377 ms over 4121 ms (14.89x)`, i.e. the draw
+    // handler runs ~505x/s while `current_time` ticks ~15 ms, so seven calls in eight see the same
+    // millisecond and a millisecond-based rate is meaningless in this event. The step is the one
+    // clock that agrees with itself (`dt 17.97` at ~44-58 steps/s, every probe), so the bob is
+    // advanced in `OnStep` and this branch only **picks the frame** to draw.
+    //
+    // Nothing is done here on purpose - the branch is kept (rather than folded into `else`) so that
+    // the walk/idle/dead split stays visible, and so the next reader can see the frame is *read*
+    // here, not written.
+    global.coopIdleDraws += 1;
 } else {
     global.coopDeadTicks += 1;                     // M5k7: draws with NO idle body (neither branch)
     // No idle body to animate: settle the walk frame back to its standing pose and hold it.

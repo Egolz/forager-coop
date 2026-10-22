@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.81-m5k6";
+global.coopVersion  = "0.0.82-m5k7";
 global.coopProtocol = 11;  // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -267,6 +267,16 @@ global.coopBobCyclesP = 0;
 global.coopBobCyclesQ = 0;
 global.coopBobUnitsP  = 0;
 global.coopBobUnitsQ  = 0;
+// M5k7: **which branch the draw handler takes, and how often.** The F3 measurement shows the puppet
+// bobbing 0.18/s against a requested 2/s - a factor of 11 - and the arithmetic inside the idle branch
+// is provably right, so the factor has to be in how often that branch is entered. These count each of
+// the three branches (`walk` / `idle` / `dead`) plus the units the idle branch added and the `_dt` it
+// was given, so "the rate is right but the branch rarely runs" is a reading, not an inference.
+global.coopWalkTicks      = 0;
+global.coopIdleTicks      = 0;
+global.coopDeadTicks      = 0;
+global.coopIdleUnitsAdded = 0;
+global.coopIdleDtSum      = 0;
 // Where the peer is actually drawn. The host decides, because the host is the side that
 // knows the world - a peer with no physics (the mock) reports a position inside a tree or in
 // the water, and the host pulls it onto ground a body could stand on.

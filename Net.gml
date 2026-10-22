@@ -990,6 +990,24 @@ if (global.coopBobArmed) {
                     + ", draw dt(last) " + string(global.coopLastDt) + " ms";
         Trace(_bs_why);
         CoopSendDebugLine(_bs_why);
+        // M5k7: **the branch split, per second.** This is the number that says where a factor of 11
+        // can hide: the idle rate is provably right, so if the idle branch runs `idle/s` times a
+        // second with an average `_dt` of `idt` ms, the frames it adds each second are
+        // `idle/s * idt * rate` - and that product has to equal the cycles the puppet was measured at.
+        var _bs_branch = "bob branches over " + string(floor(_bs_ms)) + " ms:"
+                       + " walk " + string(floor(global.coopWalkTicks / _bs_s * 10) / 10) + "/s"
+                       + ", idle " + string(floor(global.coopIdleTicks / _bs_s * 10) / 10) + "/s"
+                       + ", dead " + string(floor(global.coopDeadTicks / _bs_s * 10) / 10) + "/s"
+                       + " | idle added " + string(floor(global.coopIdleUnitsAdded * 100) / 100)
+                       + " frames, dt sum " + string(floor(global.coopIdleDtSum)) + " ms"
+                       + " -> " + string(floor(global.coopIdleUnitsAdded / _bs_s * 100) / 100) + " frames/s";
+        Trace(_bs_branch);
+        CoopSendDebugLine(_bs_branch);
+        global.coopWalkTicks      = 0;
+        global.coopIdleTicks      = 0;
+        global.coopDeadTicks      = 0;
+        global.coopIdleUnitsAdded = 0;
+        global.coopIdleDtSum      = 0;
     }
 }
 

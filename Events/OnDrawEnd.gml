@@ -296,6 +296,7 @@ var _COOP_IDLE_PERIOD_S = global.coopIdlePeriodS;   // one whole bob, in seconds
 var _IDLE_UNITS = global.coopPeerStepRate;      // units per millisecond, measured from the peer
 if (_IDLE_UNITS <= 0.0005) _IDLE_UNITS = -1;    // -1 = "use the period" (computed with the frame count)
 if (_walking) {
+    global.coopWalkTicks += 1;                     // M5k7: how many draws take the WALK branch
     var _ppu = 12.2;                  // px per index-unit, from the idx probe's walking samples
     global.coopPeerFrameF += global.coopPeerSpeed * _dt / _ppu;
     var _cyc = global.coopStepMax + 1;
@@ -315,10 +316,22 @@ if (_walking) {
         if (_period_ms <= 1) _period_ms = 500;
         _idle_units = _idle_n / _period_ms;
     }
+    // **M5k7: count the branch itself.** The F3 measurement says the puppet bobs 0.18/s where the
+    // rate asks for 2/s - a factor of 11 - and the arithmetic inside this branch is provably right
+    // (`6 / 500 * 16.7 * 60 = 12 frames/s = 2 cycles/s`). The only remaining place a factor can hide
+    // is **how often this branch is entered at all**, so it is counted, with the units it added and
+    // the `_dt` it was given: if the branch runs 60x/s and the rate is right, the total is right; if
+    // it runs ~5x/s, the answer is that the draw handler is mostly taking a *different* path - and
+    // which path can be told from the counts of the other two branches beside it.
+    global.coopIdleTicks += 1;
+    global.coopIdleUnitsAdded += _idle_units * _dt;
+    global.coopIdleDtSum += _dt;
+    // **end M5k7**
     global.coopIdleFrameF += _idle_units * _dt;
     if (global.coopIdleFrameF >= _idle_n) global.coopIdleFrameF = global.coopIdleFrameF mod _idle_n;
     if (global.coopIdleFrameF < 0) global.coopIdleFrameF = 0;
 } else {
+    global.coopDeadTicks += 1;                     // M5k7: draws with NO idle body (neither branch)
     // No idle body to animate: settle the walk frame back to its standing pose and hold it.
     global.coopIdleFrameF = 0;
 }

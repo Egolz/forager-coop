@@ -1060,9 +1060,26 @@ if (global.coopBobArmed) {
                       + string(floor(global.coopDtRawSum / _bs_ms * 100) / 100) + "x)";
         Trace(_bs_clock);
         CoopSendDebugLine(_bs_clock);
+        // **M5k9: the walk audit.** The walk frame is now advanced by the **distance moved**, so the
+        // check is arithmetic that has no time in it at all: `px moved / 12.2 px-per-unit` must equal
+        // the units added, whatever the frame rate did. `expect` restates that ratio from the measured
+        // pixels, so a walk that is still clock-driven (or double-counted) shows up as `expect`
+        // disagreeing with `added` instead of being read off a rate that only looks right.
+        var _bs_walk = "walk frames over " + string(floor(_bs_ms)) + " ms:"
+                     + " draw walk " + string(floor(global.coopWalkTicks / _bs_s * 10) / 10) + "/s"
+                     + " | moved " + string(floor(global.coopWalkPxAdded * 10) / 10) + " px"
+                     + " -> added " + string(floor(global.coopWalkUnitsAdded * 100) / 100) + " units"
+                     + " (" + string(floor(global.coopWalkUnitsAdded / _bs_s * 100) / 100) + " u/s)"
+                     + " | expect " + string(floor(global.coopWalkPxAdded / 12.2 * 100) / 100)
+                     + " units from distance"
+                     + " | frames/s " + string(floor(global.coopWalkUnitsAdded / _bs_s * 100) / 100);
+        Trace(_bs_walk);
+        CoopSendDebugLine(_bs_walk);
         global.coopDtRawSum   = 0;
         global.coopOuterTicks = 0;
         global.coopWalkTicks      = 0;
+        global.coopWalkUnitsAdded = 0;
+        global.coopWalkPxAdded    = 0;
         global.coopIdleTicks      = 0;
         global.coopDeadTicks      = 0;
         global.coopIdleUnitsAdded = 0;

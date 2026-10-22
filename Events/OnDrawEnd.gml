@@ -172,6 +172,8 @@ global.coopLastDt = _dt;   // M5k5: the top-of-handler counter reads the *previo
 // the peer is actually moving - the speed is measured on the far end, from the peer's own
 // movement between two packets. The step is capped so a lost packet cannot send the
 // puppet across the island, and the puppet never goes past the target.
+var _prevDrawX = global.coopDrawX;   // M5k9: the position BEFORE this frame's move, so the walk
+var _prevDrawY = global.coopDrawY;   // animation can be driven by the distance actually travelled
 var _tx = global.coopStandX;
 var _ty = global.coopStandY;
 if (!global.coopDrawInit) {
@@ -304,10 +306,28 @@ if (_face == 0) _face = 1;
 // `CoopIdleUnits()` (Net.gml), called by `OnStep` - see the M5k8b note there for why one place was
 // not enough and two were.
 var _COOP_IDLE_PERIOD_S = global.coopIdlePeriodS;   // one whole bob, in seconds (M5k6: a global now)
+// **M5k9: the walk animation is driven by the DISTANCE the puppet actually moved, not by a clock.**
+//
+// The idle bob had to be rescued from `current_time` because that clock is off by **14.89x** in this
+// event (the handler runs ~505x/s, `current_time` ticks ~15 ms). The walk was left on the same clock
+// only because walking had been *reported* working - and the owner's report was
+// *"the mock animates movement slowly and freezes"*, which is the same symptom the bob had.
+//
+// Rather than swap one clock for another, the walk needs **no clock at all**: legs should turn with
+// the ground covered, not with wall time. That is the same principle M5j already applied to *when*
+// the puppet walks (movement-driven, not packet-driven) - it was simply never applied to *how fast
+// the legs move*. The distance this frame is exactly the distance the position block above just
+// moved the puppet, so the animation cannot drift from the motion, at any frame rate, and a stalled
+// or duplicated draw carries no time and therefore cannot distort it.
+var _moved_px = point_distance(_prevDrawX, _prevDrawY, global.coopDrawX, global.coopDrawY);
 if (_walking) {
     global.coopWalkTicks += 1;                     // M5k7: how many draws take the WALK branch
-    var _ppu = 12.2;                  // px per index-unit, from the idx probe's walking samples
-    global.coopPeerFrameF += global.coopPeerSpeed * _dt / _ppu;
+    // 12.2 px per index-unit, from the idx probe's clean walking samples (33/2.70, 76/5.85, 75/5.85).
+    var _ppu = 12.2;
+    var _walk_units = _moved_px / _ppu;
+    global.coopPeerFrameF += _walk_units;
+    global.coopWalkUnitsAdded += _walk_units;      // M5k9: the probe checks distance -> frames
+    global.coopWalkPxAdded     += _moved_px;
     var _cyc = global.coopStepMax + 1;
     if (global.coopPeerFrameF >= _cyc) global.coopPeerFrameF = global.coopPeerFrameF mod _cyc;
     if (global.coopPeerFrameF < 0) global.coopPeerFrameF = 0;

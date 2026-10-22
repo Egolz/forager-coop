@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.85-m5k8c";
+global.coopVersion  = "0.0.86-m5k9";
 global.coopProtocol = 11;  // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -273,6 +273,8 @@ global.coopBobUnitsQ  = 0;
 // the three branches (`walk` / `idle` / `dead`) plus the units the idle branch added and the `_dt` it
 // was given, so "the rate is right but the branch rarely runs" is a reading, not an inference.
 global.coopWalkTicks      = 0;
+global.coopWalkUnitsAdded = 0;   // M5k9: index-units the walk branch added (distance-driven)
+global.coopWalkPxAdded    = 0;   // M5k9: pixels the puppet actually moved in that branch
 global.coopIdleTicks      = 0;
 global.coopDeadTicks      = 0;
 global.coopIdleUnitsAdded = 0;

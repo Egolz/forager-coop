@@ -1004,6 +1004,10 @@ if (global.coopBobArmed) {
                        + " frames/s | step " + string(floor(global.coopStepMs * 100) / 100) + " ms"
                        + " (raw " + string(global.coopStepMsRaw) + " ms = "
                        + string(floor(1000 / max(1, global.coopStepMs) * 10) / 10) + " steps/s)"
+                       + " | OPERANDS units " + string(global.coopLastUnits)
+                       + " x step " + string(floor(global.coopLastStepMs * 100) / 100)
+                       + " = " + string(floor(global.coopLastUnits * global.coopLastStepMs * 10000) / 10000)
+                       + " frames/step"
                        + " -> expect " + string(floor(global.coopIdleUnitsAdded / _bs_s / 6 * 100) / 100)
                        + " bobs/s";
         Trace(_bs_branch);

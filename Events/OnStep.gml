@@ -181,6 +181,15 @@ if (global.coopPeerAlive && !global.coopPeerWalking) {
     global.coopIdleTicks += 1;
     global.coopIdleUnitsAdded += _ib_units * _ib_step_ms;
     global.coopIdleDtSum += _ib_step_ms;
+    // **M5k8b: keep the last OPERANDS, not just the product.** The product is 10.19x smaller than
+    // `_ib_units * coopStepMs` says it should be, and every input has been measured and re-measured
+    // without moving: the period prints as 0.50 s, the step prints as 25.26 ms, and the branch runs
+    // 458 times over the window - which by the formula is 138 frames, against 13.62 counted. A
+    // factor of ten has been the shape of this bug from the start, so the two numbers the arithmetic
+    // actually multiplies are recorded at the moment it multiplies them, instead of being inferred
+    // from a line printed once at the end of the window.
+    global.coopLastUnits  = _ib_units;
+    global.coopLastStepMs = _ib_step_ms;
 }
 
 // `coopIdxUnitsStand` / `coopIdxUnitsWalk` are hundredths gained, `coopIdxStepsStand` /

@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.83-m5k8";
+global.coopVersion  = "0.0.84-m5k8b";
 global.coopProtocol = 11;  // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -283,6 +283,10 @@ global.coopIdleDraws      = 0;   // M5k8: draws that took the idle branch (the f
 global.coopStepAt    = 0;   // `current_time` at the previous step
 global.coopStepMs    = 0;   // smoothed step length in ms (0 until the first two steps)
 global.coopStepMsRaw = 0;   // the last raw gap, for the probe to print
+// M5k8b: the operands the idle advance actually used on the last step, so the product can be
+// checked instead of inferred (see the note in Events/OnStep.gml).
+global.coopLastUnits  = 0;
+global.coopLastStepMs = 0;
 // M5k7b: **the raw `current_time` gap, unclamped**, plus a count of the *outermost* draw calls. Two
 // independent accumulators disagree about elapsed time (`OnStep` sums ~18 ms per call at ~44 calls/s,
 // which is real; the idle branch sums ~19 ms per call at ~290 calls/s, which would be 5.6x wall clock),

@@ -157,15 +157,12 @@ global.coopStepAt = current_time;
 if (global.coopPeerAlive && !global.coopPeerWalking) {
     var _ib_n = sprite_get_number(global.coopIdleSprite);
     if (_ib_n < 1) _ib_n = 6;                       // sprPlayerIdle has six frames (live)
-    var _ib_units = global.coopPeerStepRate;        // units per millisecond, measured from the peer
-    if (_ib_units <= 0.0005) {
-        // `-1`-style meaning: no peer rate, so the **period** is the source of truth - one whole bob
-        // takes `coopIdlePeriodS` seconds - and the frame count converts it, so the only number to
-        // tune is the period the owner can actually see.
-        var _ib_period_ms = global.coopIdlePeriodS * 1000;
-        if (_ib_period_ms <= 1) _ib_period_ms = 500;
-        _ib_units = _ib_n / _ib_period_ms;
-    }
+    // **One macro decides the rate** (`CoopIdleUnits`), shared with the draw handler, so the two
+    // can never derive it differently. M5k8b found the last of the factor-of-ten family here: the
+    // inline gate accepted a *tiny nonzero* peer rate (a standing peer's jitter, ~0.0007 u/ms)
+    // over the correct 0.012 from the period, and the bob ran ~18x slow while every printed number
+    // looked right.
+    var _ib_units = CoopIdleUnits();
     // One game step, in milliseconds - **measured here, not assumed.** `fps` was the first
     // thought and it is the wrong one: it is the *draw* rate, and this build's draw handler runs
     // ~505x/s while the step runs ~44-58x/s, so `1000 / fps` would be off by an order of

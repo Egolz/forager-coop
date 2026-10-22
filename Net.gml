@@ -369,6 +369,40 @@ CoopResolveBodySprite();
 if (global.coopBodySprite >= 0) return global.coopBodySprite;
 return -1;
 
+#define CoopIdleUnits()
+// **The one place that decides how fast the idle bob advances: units per millisecond.**
+//
+// M5k8b put the operands in the probe and they named the bug in a single reading:
+//
+//     OPERANDS units 0.00 x step 44.97 = 0.03 frames/step
+//
+// `units` printed as **0.00** and the product was 0.03, so the rate in use was ~0.0007 u/ms where
+// the period asks for **0.012** - a factor of ~18, and the last hiding place of the factor-of-ten
+// family this round has been chasing all along. The cause was the **gate**, not the number: the
+// peer-rate path was taken when `coopPeerStepRate` was a tiny *nonzero* value. A standing peer's
+// index does not advance, so a rate measured between two packets is **0** - but the mock's ~20 Hz
+// packets jitter enough that the difference is occasionally a hair above zero (0.0007), which
+// survives the `if (< 0) = 0` clamp, prints as `0.00`, and **passed the `<= 0.0005` test** - so a
+// noise value overrode a correct period and the bob ran ~18x slow.
+//
+// The lesson is about the shape of the test, not the constant: the question is not "is this rate
+// positive" but **"is this a real idle rate"**. A peer that is genuinely bobbing sits near the
+// period's own rate, so the peer rate is accepted only inside a band around it - a tenth of it is
+// the floor (10x slow is already visibly wrong), and the walk ceiling above. Anything below the
+// floor is indistinguishable from a stalled index and is **discarded**, so the period drives the
+// bob instead. Both events call this one macro, because the two of them deriving the same number
+// separately is how they came to disagree.
+var _ci_n = sprite_get_number(global.coopIdleSprite);
+if (_ci_n < 1) _ci_n = 6;                        // sprPlayerIdle has six frames (live)
+var _ci_period_ms = global.coopIdlePeriodS * 1000;
+if (_ci_period_ms <= 1) _ci_period_ms = 500;
+var _ci_from_period = _ci_n / _ci_period_ms;     // the period's own rate, the reference
+var _ci_peer = global.coopPeerStepRate;
+// A tenth of the period's rate is the floor: below it the peer's measurement is not a rate at all.
+// Above `0.05` the wire clamp in the POS reader has already capped it (that is the walk ceiling).
+if (_ci_peer >= _ci_from_period * 0.1 && _ci_peer <= 0.05) return _ci_peer;
+return _ci_from_period;
+
 #define CoopStandSpot(_x, _y, _mode)
 // Where a peer or a structure may be **put**: the reported position if it can go there,
 // else the nearest place where it can. Sets `global.coopStandX` / `global.coopStandY`.
@@ -1004,7 +1038,7 @@ if (global.coopBobArmed) {
                        + " frames/s | step " + string(floor(global.coopStepMs * 100) / 100) + " ms"
                        + " (raw " + string(global.coopStepMsRaw) + " ms = "
                        + string(floor(1000 / max(1, global.coopStepMs) * 10) / 10) + " steps/s)"
-                       + " | OPERANDS units " + string(global.coopLastUnits)
+                       + " | OPERANDS units " + string(floor(global.coopLastUnits * 100000) / 100000)
                        + " x step " + string(floor(global.coopLastStepMs * 100) / 100)
                        + " = " + string(floor(global.coopLastUnits * global.coopLastStepMs * 10000) / 10000)
                        + " frames/step"
@@ -2601,7 +2635,15 @@ switch (_cmd) {
                 // handler's arithmetic), so 0.02 a millisecond is the healthy ceiling. A stalled
                 // packet must not carry a wild rate into the frames that follow it.
                 if (global.coopPeerStepRate > 0.05) global.coopPeerStepRate = 0.05;
-                if (global.coopPeerStepRate < 0)    global.coopPeerStepRate = 0;
+                // **A floor, not just a "not negative" test (M5k8b).** A standing peer's index does
+                // not advance, so the honest rate is **0** - and the owner's own model confirmed it
+                // (`imgidx 4.20` five probes in a row). But the packets jitter, so the difference is
+                // occasionally a hair above zero (~0.0007 u/ms). That value is **noise**, it prints
+                // as `0.00`, and it used to pass the consumer's `<= 0.0005` gate and override the
+                // correct period rate, running the bob ~18x slow. Anything below a hundredth of a
+                // unit per millisecond is not a rate this mod can act on, so it is **zeroed here**,
+                // at the measurement, rather than being left for each consumer to re-judge.
+                if (global.coopPeerStepRate < 0.01) global.coopPeerStepRate = 0;
             }
         }
         global.coopPeerStepPrev   = _ps_step;

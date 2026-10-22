@@ -298,13 +298,12 @@ if (_face == 0) _face = 1;
 // therefore set directly from the period the owner can actually see, rather than from a counter that
 // stops when it matters.
 //
-// `coopPeerStepRate` is used when it is available: it is the rate the peer itself reports, so a peer
-// whose bob genuinely differs drives the puppet to match. Otherwise the **period** is the source of
-// truth and the frame count converts it - `_idle_n / period / 1000` units per millisecond - so 0.5 s
-// stays the one number that can be tuned, instead of a magic rate that has to be re-derived.
+// `coopPeerStepRate` belongs to the **step** now: the idle branch below no longer advances anything,
+// so this handler has no rate to resolve at all. `_COOP_IDLE_PERIOD_S` is still named here only for
+// the walk branch's arithmetic below, and the single decision about the idle rate lives in
+// `CoopIdleUnits()` (Net.gml), called by `OnStep` - see the M5k8b note there for why one place was
+// not enough and two were.
 var _COOP_IDLE_PERIOD_S = global.coopIdlePeriodS;   // one whole bob, in seconds (M5k6: a global now)
-var _IDLE_UNITS = global.coopPeerStepRate;      // units per millisecond, measured from the peer
-if (_IDLE_UNITS <= 0.0005) _IDLE_UNITS = -1;    // -1 = "use the period" (computed with the frame count)
 if (_walking) {
     global.coopWalkTicks += 1;                     // M5k7: how many draws take the WALK branch
     var _ppu = 12.2;                  // px per index-unit, from the idx probe's walking samples

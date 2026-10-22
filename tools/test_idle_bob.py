@@ -43,6 +43,9 @@ What this file pins down:
      real measurements, which is why the target sits between them and not at either.
   4. **The step length is measured, never `fps`** - `fps` is the draw rate in this build and would be
      wrong by an order of magnitude.
+  5. **M5k8c: a tiny nonzero peer rate must never override the period.** The stub-or-noise rate
+     (~0.0007 u/ms) is rejected on both sides of the pipe: at the measurement (floored to 0) and at
+     `CoopIdleUnits` (below a tenth of the period's rate). The correct 0.012 survives.
 """
 import re
 from pathlib import Path
@@ -107,6 +110,20 @@ def check_bob_lives_in_on_step(failures: list) -> None:
     print("structure: bob advanced in OnStep, read in OnDrawEnd, step length measured (no `fps`)")
 
 
+def idle_units(peer_rate: float, frames: int = IDLE_FRAMES,
+               period_s: float = IDLE_PERIOD_S) -> float:
+    """The mod's `CoopIdleUnits()`: the peer rate only inside a plausible band, else the period.
+
+    M5k8c: the observed failure was a peer rate of ~0.0007 u/ms (a standing peer's packet jitter)
+    overriding the correct 0.012. The gate here is the *shape* of the fix, so a change back to a
+    bare `> 0` test fails this file.
+    """
+    from_period = frames / (period_s * 1000.0)
+    if from_period * 0.1 <= peer_rate <= 0.05:
+        return peer_rate
+    return from_period
+
+
 def main() -> int:
     failures = []
 
@@ -167,6 +184,24 @@ def main() -> int:
     print(f"the same draw under the NEW {NEW_DT_CEILING_MS} ms ceiling -> {fixed:.2f} s per bob")
     if abs(fixed - IDLE_PERIOD_S) > 1e-9:
         failures.append("the new ceiling still distorts an ordinary slow draw")
+
+    # 6. M5k8c: the noise gate. This is the bug that cost the round, and its shape is the point.
+    period_rate = units_per_ms(IDLE_FRAMES, IDLE_PERIOD_S)
+    noise = 0.0007            # the peer rate the probe printed as `units 0.00`
+    print(f"peer noise rate {noise} u/ms (a standing peer's jitter, prints as '0.00'): "
+          f"gate -> {idle_units(noise):.4f} u/ms (period rate {period_rate:.4f})")
+    if abs(idle_units(noise) - period_rate) > 1e-9:
+        failures.append("a tiny nonzero peer rate still overrides the period - the M5k8c bug")
+    if idle_units(0.0) != period_rate:
+        failures.append("a zero peer rate must fall through to the period")
+    # A peer that genuinely reports its own idle rate must still be honoured.
+    peer_real = period_rate * 1.5
+    if abs(idle_units(peer_real) - peer_real) > 1e-9:
+        failures.append("a plausible peer rate is not honoured - the peer-rates path is dead")
+    # ...and the walk ceiling still caps it.
+    if idle_units(0.9) != period_rate:
+        failures.append("an above-ceiling peer rate is not rejected")
+    print(f"  zero -> period, plausible {peer_real:.4f} -> honoured, 0.9 -> rejected: ok")
 
     if failures:
         for fl in failures:

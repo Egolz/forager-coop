@@ -1657,6 +1657,38 @@ if (_kind == 1) {
         } else {
             var _am_new = instance_create_depth(floor(_x), floor(_y),
                                                 CoopStructDepth(_y), _obj);
+            // **The slime's model (M5m).** `objModEnemy` has no visible body by default; give it
+            // the real slime sprite so the synced mob looks like a mob. Prefer copying from an existing
+            // `objSlime` instance (the game sets its sprite correctly), else fall back to `sprSlime`.
+            if (instance_exists(_am_new)) {
+                var _am_give = -1;
+                if (object_get_name(_obj) == "objModEnemy") {
+                    var _am_slime_obj = asset_get_index("objSlime");
+                    if (_am_slime_obj > 0) {
+                        if (instance_number(_am_slime_obj) > 0) {
+                            var _am_tmpl = instance_find(_am_slime_obj, 0);
+                            if (instance_exists(_am_tmpl) && _am_tmpl.sprite_index >= 0) {
+                                _am_new.sprite_index = _am_tmpl.sprite_index;
+                                _am_give = _am_new.sprite_index;
+                            }
+                        }
+                        if (_am_give < 0) {
+                            var _am_spr = asset_get_index("sprSlime");
+                            if (_am_spr >= 0) {
+                                _am_new.sprite_index = _am_spr;
+                                _am_give = _am_spr;
+                            }
+                        }
+                        if (_am_give < 0) {
+                            var _am_ospr = object_get_sprite(_am_slime_obj);
+                            if (_am_ospr >= 0) {
+                                _am_new.sprite_index = _am_ospr;
+                                _am_give = _am_ospr;
+                            }
+                        }
+                    }
+                }
+            }
             Trace("Co-op: created the mob that appeared on the other side: "
                   + object_get_name(_obj) + " at " + string(floor(_x)) + "," + string(floor(_y)) + ".");
         }

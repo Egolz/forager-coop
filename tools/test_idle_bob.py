@@ -54,6 +54,7 @@ HERE = Path(__file__).resolve().parent
 MOD = HERE.parent
 ON_STEP = MOD / "Events" / "OnStep.gml"
 ON_DRAW_END = MOD / "Events" / "OnDrawEnd.gml"
+NET = MOD / "Net.gml"
 
 IDLE_PERIOD_S = 0.5            # the owner's measurement: ~2 bobs a second
 IDLE_FRAMES = 6               # sprPlayerIdle's own frame count (live)
@@ -124,11 +125,37 @@ def idle_units(peer_rate: float, frames: int = IDLE_FRAMES,
     return from_period
 
 
+def check_window_counters_reset_at_arming(failures: list) -> None:
+    """M5k9b: the window counters must be zeroed when F3 *arms*, not only when it prints.
+
+    This was a **measuring** bug that read exactly like a code bug: the first press of a session
+    divided counters accumulated since mod load (~35 s) by a ~6 s window and reported
+    `step idle 165.10/s` against a measured `41.6 steps/s`, plus `expect 9.39 bobs/s` while the bob's
+    own cycle counters - which *were* reset at arming - said 2.03. A report contradicting itself is the
+    tell, and the cause was two counters covering different spans.
+    """
+    src = NET.read_text(encoding="utf-8")
+    code = "\n".join(line.split("//")[0] for line in src.splitlines())
+    marker = "global.coopBobArmed == false && global.coopBobSteps == 0"
+    if marker not in code:
+        failures.append("the F3 arming block is gone - locate it before asserting")
+        return
+    arm = code[code.index(marker):]
+    arm_block = arm[:arm.index("\n}")]
+    for name in ("coopIdleTicks", "coopWalkTicks", "coopIdleDraws", "coopIdleUnitsAdded"):
+        if f"global.{name}" not in arm_block:
+            failures.append(f"the F3 arming block does not reset `{name}` - the window would be "
+                            f"measured from mod load instead")
+    print("structure: F3 arming resets the idle/walk window counters")
+
+
 def main() -> int:
     failures = []
 
     # 0. M5k8: where the clock lives, and that it is measured.
     check_bob_lives_in_on_step(failures)
+    # 0b. M5k9b: and that the measurement window is actually a window.
+    check_window_counters_reset_at_arming(failures)
 
     # 1. Sprite 0 is the idle body, and a `> 0` test is what deleted it three times over.
     idle_body_index = 0

@@ -1033,6 +1033,13 @@ if (global.coopBobArmed) {
                        + ", draw walk " + string(floor(global.coopWalkTicks / _bs_s * 10) / 10) + "/s"
                        + ", draw idle " + string(floor(global.coopIdleDraws / _bs_s * 10) / 10) + "/s"
                        + ", dead " + string(floor(global.coopDeadTicks / _bs_s * 10) / 10) + "/s"
+                       // **The invariant that would have caught the M5k9b phantom in one look.**
+                       // The idle branch is entered once per step, so against the *measured* step rate
+                       // this must be ~1.0 whenever the peer is standing. It read 4.4 when the counters
+                       // covered the whole session instead of the window, and nothing else flagged it.
+                       + " | idle/step " + string(floor(global.coopIdleTicks
+                                                    / max(1, global.coopBobWindow) * 100) / 100)
+                       + " (must be <= ~1.0)"
                        + " | idle added " + string(floor(global.coopIdleUnitsAdded * 100) / 100)
                        + " frames -> " + string(floor(global.coopIdleUnitsAdded / _bs_s * 100) / 100)
                        + " frames/s | step " + string(floor(global.coopStepMs * 100) / 100) + " ms"
@@ -1099,6 +1106,25 @@ if (global.coopBobArmed == false && global.coopBobSteps == 0 && global.coopBobAs
     global.coopBobCyclesQ = 0;
     global.coopBobUnitsP  = 0;
     global.coopBobUnitsQ  = 0;
+    // **M5k9b: the window counters must be reset HERE, not only at the print.**
+    //
+    // They used to be zeroed at the end of the previous report, which means the *first* press of a
+    // session divided counters accumulated **since mod load** by a window of only ~6 s. It read
+    // `step idle 165.10/s` against a measured `41.6 steps/s` - a 4x phantom that looks exactly like
+    // a real bug and is not one. The bob's own cycle counters *were* reset here, which is why the
+    // bob measured 2.03/s and was correct while the branch line claimed 9.39 - a contradiction
+    // inside one report. Resetting the window counters at arming makes every per-second figure in
+    // the report describe the same window as the measurement it sits beside.
+    global.coopWalkTicks      = 0;
+    global.coopWalkUnitsAdded = 0;
+    global.coopWalkPxAdded    = 0;
+    global.coopIdleTicks      = 0;
+    global.coopDeadTicks      = 0;
+    global.coopIdleUnitsAdded = 0;
+    global.coopIdleDtSum      = 0;
+    global.coopIdleDraws      = 0;
+    global.coopDtRawSum       = 0;
+    global.coopOuterTicks     = 0;
 }
 
 #define CoopProbeItems()

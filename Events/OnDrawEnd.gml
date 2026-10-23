@@ -391,18 +391,32 @@ var _top = _yd - _yo;      // the sprite's top edge, in world coordinates
 // does instead is **reset** - `5.85 -> 0.00` - and that reset is the only mark of a roll the
 // wire carries.
 //
-// So the puppet spins on the reset: `global.coopRollSpin` is set from the packet handler for
-// a quarter of a second, and the sprite is turned through a full circle over that time. The
-// game's own roll is a spin of the body - it has no sprite of its own, which is why the
-// assets are only idle and walk - so a turn is what it should look like.
-if (global.coopRollSpin > 0) {
-    global.coopRollSpin -= _dt / 1000;
-    if (global.coopRollSpin < 0) global.coopRollSpin = 0;
-}
+// **M5n: time-based, not draw-dt.** The roll used to subtract `_dt / 1000` in OnDrawEnd,
+// which is the same untrustworthy clock that broke the idle bob/walk. Draw can run at ~500/s
+// while the tick is ~15 ms, so `_dt`-based decay is wrong in both directions. The packet
+// handler now stores `global.coopRollEnd = current_time + 250`, so we compute remaining from
+// `current_time` and derive the angle from it - independent of how fast/hitched the draw is.
 var _roll_angle = 0;
-if (global.coopRollStep > 0) {
+var _roll_step = global.coopRollStep;
+if (_roll_step <= 0) _roll_step = 0.25;
+var _roll_remain = -1;
+if (global.coopRollEnd > 0) {
+    _roll_remain = (global.coopRollEnd - current_time) / 1000;
+}
+if (_roll_remain < 0) {
+    // legacy path: fall back to the old value if end-time not set
+    if (global.coopRollSpin > 0) {
+        _roll_remain = global.coopRollSpin;
+        global.coopRollSpin = 0;
+    }
+}
+if (_roll_remain > 0) {
+    if (_roll_remain > _roll_step) _roll_remain = _roll_step;
     // 0 -> 360 degrees as the spin runs out.
-    _roll_angle = 360 * (1 - global.coopRollSpin / global.coopRollStep);
+    _roll_angle = 360 * (1 - _roll_remain / _roll_step);
+} else {
+    global.coopRollEnd = 0;
+    global.coopRollSpin = 0;
 }
 
 // The angle is still carried and still drawn: the reference mod draws its puppet with it,

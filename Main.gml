@@ -46,7 +46,7 @@ enum CoopCmd {
     MOB              = 19   // either way: a mob appeared or died
 }
 
-global.coopVersion  = "0.0.87-m5k9b";
+global.coopVersion  = "0.0.88-m5n";
 global.coopProtocol = 11;  // 1 = presence only (M1); 2 adds the world-sync packets;
                            // 3 adds DEBUG_LINE, the remote console; 4 adds the
                            // M2.2 loot packets (DROP/PICKUP/RESOURCE_DESTROY);
@@ -192,8 +192,9 @@ global.coopPeerStepPrevAt = 0;  // and when it arrived
 // here from the puppet's own movement. Fractional, so the frames are smooth rather than stepped.
 global.coopPeerFrameF = 0;
 global.coopStepMax = 5;      // the cycle's last frame: six index-units, measured on the wire
-global.coopRollSpin  = 0;      // seconds of roll spin left on the puppet
+global.coopRollSpin  = 0;      // seconds of roll spin left on the puppet (kept for compat)
 global.coopRollStep  = 0.25;   // how long that spin lasts (the roll's own duration)
+global.coopRollEnd   = 0;      // M5n: roll ends at this current_time (ms) - time-based, not draw-dt
 global.coopPeerHold = -1;
 // M3.4: the puppet's animation. **The local cycle is gone** (2026-10-22): a probe showed
 // the peer's own `image_index` is a *timer*, and the puppet is drawn at the peer's own

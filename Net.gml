@@ -2691,8 +2691,11 @@ switch (_cmd) {
             && global.coopPeerStep < global.coopStepMax - 0.5) {
             // Not a cycle wrap (which would have come from the **top** of the cycle): a real
             // reset from the middle. That is the roll.
-            global.coopRollSpin = 0.25;      // seconds left of the spin
+            // **M5n: time-based, not draw-dt.** Store the absolute end time; OnDrawEnd computes
+            // remaining from `current_time` so a jittery draw clock cannot freeze or speed the spin.
+            global.coopRollSpin = 0.25;      // seconds left of the spin (legacy/compat)
             global.coopRollStep = 0.25;
+            global.coopRollEnd  = current_time + 250;
         }
         if (global.coopPeerStep > _ps_step + 0.001) global.coopPeerRepeat += 1;
         // **How fast the index is running, measured between two packets** (M5i). This is what

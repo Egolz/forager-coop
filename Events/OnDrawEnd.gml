@@ -465,7 +465,7 @@ if (_walking) {
             if (global.coopDustFrames < 1) global.coopDustFrames = 1;
         }
     }
-    if ((global.coopDustDebug || _walking) && global.coopDustSprite > 0 && global.coopDustFrames > 0) {
+    if ((global.coopDustDebug || global.coopPeerWalking) && global.coopDustSprite > 0 && global.coopDustFrames > 0) {
         // **M5n2b: time-based dust, not draw-count.** Advance by elapsed time (~15 fps)
         // instead of counting draw calls. Using modulo + floor avoids the while-loop
         // edge case that left the frame stuck.

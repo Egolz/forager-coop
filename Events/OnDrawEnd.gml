@@ -466,14 +466,17 @@ if (_walking) {
         }
     }
     if (global.coopDustSprite > 0 && global.coopDustFrames > 0) {
-        // **M5n2: time-based dust, not draw-count.** The draw counter advanced every time
-        // OnDrawEnd ran (~500/s) which made dust speed depend on draw rate/hitches. Now
-        // advance ~15 fps in wall time so it animates smoothly regardless of draw timing.
+        // **M5n2b: time-based dust, not draw-count.** Advance by elapsed time (~15 fps)
+        // instead of counting draw calls. Using modulo + floor avoids the while-loop
+        // edge case that left the frame stuck.
         if (global.coopDustAt <= 0) global.coopDustAt = current_time;
-        while (current_time - global.coopDustAt >= 66) { // ~15 fps
-            global.coopDustAt += 66;
-            global.coopDustFrame += 1;
-            if (global.coopDustFrame >= global.coopDustFrames) global.coopDustFrame = 0;
+        var _dust_ms = current_time - global.coopDustAt;
+        if (_dust_ms >= 66) {
+            var _dust_add = floor(_dust_ms / 66);
+            if (_dust_add > 0) {
+                global.coopDustAt += _dust_add * 66;
+                global.coopDustFrame = (global.coopDustFrame + _dust_add) % global.coopDustFrames;
+            }
         }
         var _dh = sprite_get_height(global.coopDustSprite);
         var _dyo = sprite_get_yoffset(global.coopDustSprite);

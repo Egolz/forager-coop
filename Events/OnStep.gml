@@ -495,3 +495,6 @@ if (instance_exists(objPlayer)) {
         }
     }
 }
+ 
+ i f   ( k e y b o a r d _ c h e c k _ p r e s s e d ( o r d ( " D " ) ) )   {   g l o b a l . c o o p D u s t D e b u g   =   ! g l o b a l . c o o p D u s t D e b u g ;   T r a c e ( " C o - o p :   d u s t   d e b u g   "   +   ( g l o b a l . c o o p D u s t D e b u g   ?   " O N "   :   " O F F " ) ) ;   }  
+ 

@@ -91,7 +91,7 @@ if (!_walking) {
 var _spr = global.coopPeer.sprite;
 if (_spr <= 0) {
     var _fallback = -1;
-    if (_walking) {
+    if (_walking || global.coopDustDebug) {
         if (global.coopWalkSprite <= 0) {
             global.coopWalkSprite = asset_get_index("sprPlayerWalk");
             if (global.coopWalkSprite <= 0) global.coopWalkSprite = asset_get_index("Player Walk");
@@ -320,7 +320,7 @@ var _COOP_IDLE_PERIOD_S = global.coopIdlePeriodS;   // one whole bob, in seconds
 // moved the puppet, so the animation cannot drift from the motion, at any frame rate, and a stalled
 // or duplicated draw carries no time and therefore cannot distort it.
 var _moved_px = point_distance(_prevDrawX, _prevDrawY, global.coopDrawX, global.coopDrawY);
-if (_walking) {
+if (_walking || global.coopDustDebug) {
     global.coopWalkTicks += 1;                     // M5k7: how many draws take the WALK branch
     // 12.2 px per index-unit, from the idx probe's clean walking samples (33/2.70, 76/5.85, 75/5.85).
     var _ppu = 12.2;
@@ -349,7 +349,7 @@ if (_walking) {
     global.coopIdleFrameF = 0;
 }
 var _frame;
-if (_walking) {
+if (_walking || global.coopDustDebug) {
     _frame = floor(global.coopPeerFrameF);
     if (_frame < 0) _frame = 0;
 } else {
@@ -456,7 +456,7 @@ if (_spr >= 0) {
 // So the puff is **animated**: `sprDust` has its own sub-images, the counter below runs
 // through them at the game's own rate, and the puff is drawn by its own metrics so its
 // bottom edge lands on the ground.
-if (_walking) {
+if (_walking || global.coopDustDebug) {
     if (global.coopDustSprite <= 0) {
         global.coopDustSprite = asset_get_index("sprDust");
         global.coopDustFrames = 0;

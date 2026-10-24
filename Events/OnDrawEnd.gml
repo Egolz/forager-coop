@@ -1,4 +1,4 @@
-#define OnDrawEnd
+#define OnDrawEnd()
 // Forager Co-op - draws the remote player and their name.
 //
 // Two earlier versions of this file were wrong about why the game crashed on leaving a world,
@@ -459,13 +459,6 @@ if (_spr >= 0) {
 if (_walking) {
     if (global.coopDustSprite <= 0) {
         global.coopDustSprite = asset_get_index("sprDust");
-        // **How many frames the puff has - asked, not guessed.** `sprite_get_number(name)`
-        // is the standard call for a sprite's sub-image count and it resolves in this build.
-        // The guess of four that stood here before was a guess, and a guess that is *wrong
-        // in the high direction draws nothing*: a frame past the end of a sprite is empty,
-        // so the cycle sat on blank frames and the owner saw a puff that "does not move"
-        // (live, 2026-10-22). `sprDust` also exists - it was checked in the asset table
-        // alongside `objDust`, `DustSpawn` and `DustEntityStep`.
         global.coopDustFrames = 0;
         if (global.coopDustSprite > 0) {
             global.coopDustFrames = sprite_get_number(global.coopDustSprite);
@@ -473,23 +466,18 @@ if (_walking) {
         }
     }
     if (global.coopDustSprite > 0 && global.coopDustFrames > 0) {
-        // **The puff runs on its own clock, not the walk cycle.** Tying it to the walk was the
-        // mistake twice over: the walk cycle is six steps to the player's half-second, so a
-        // puff that advanced with it moved in visible jerks and then sat still. This is a
-        // free-running counter - one sub-image every fourth drawn frame, about fifteen puffs a
-        // second - so the dust animates while the puppet walks.
-        global.coopDustTimer += 1;
-        if (global.coopDustTimer >= 4) {
-            global.coopDustTimer = 0;
+        // **M5n2: time-based dust, not draw-count.** The draw counter advanced every time
+        // OnDrawEnd ran (~500/s) which made dust speed depend on draw rate/hitches. Now
+        // advance ~15 fps in wall time so it animates smoothly regardless of draw timing.
+        if (global.coopDustAt <= 0) global.coopDustAt = current_time;
+        while (current_time - global.coopDustAt >= 66) { // ~15 fps
+            global.coopDustAt += 66;
             global.coopDustFrame += 1;
             if (global.coopDustFrame >= global.coopDustFrames) global.coopDustFrame = 0;
         }
         var _dh = sprite_get_height(global.coopDustSprite);
         var _dyo = sprite_get_yoffset(global.coopDustSprite);
         var _ddy = _y - _dh + _dyo;
-        // **Twice as wide as tall.** Forager's players move left and right almost all the
-        // time, and `sprDust` is a soft round puff; stretched horizontally it reads as the
-        // smear a foot leaves on the ground rather than as a ball.
         draw_sprite_ext(global.coopDustSprite, global.coopDustFrame, _x - _face * 6, _ddy,
                         2, 1, 0, c_white, 0.75);
     }

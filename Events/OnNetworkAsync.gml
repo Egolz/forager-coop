@@ -45,7 +45,19 @@ if (_type == network_type_connect) {
 if (_type == network_type_disconnect) {
     Trace("Co-op: socket disconnected.");
     if (global.coopIsHost) {
-        CoopResetPeer();
+        // Host does not own the peer socket (runtime owns it). Do NOT call CoopResetPeer()
+        // as it can destroy/reset things incorrectly and cause native crash on disconnect.
+        global.coopConnected   = false;
+        global.coopPeerAlive   = false;
+        global.coopPeer.seen   = false;
+        global.coopPeerVersion = "";
+        global.coopPeerName    = "";
+        global.coopSocket      = -1;
+        global.coopSocketOwned = false;
+        global.coopPending        = [];
+        global.coopApplyingRemote = false;
+        global.coopPingSentAt  = -1;
+        global.coopPingMs      = -1;
         Trace("Co-op: still hosting, waiting for a new peer.");
     } else {
         CoopDisconnect("peer dropped");

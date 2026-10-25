@@ -207,6 +207,7 @@ global.coopDustFrames = 0;     // how many sub-images it has
 global.coopDustTimer = 0;      // drawn frames until the next sub-image (legacy)
 global.coopDustAt    = 0;      // M5n2: last time we advanced dust frame (ms)
 global.coopDustDebug = false;  // M5n3: force draw dust for testing with D key
+global.coopDustDebugged = false;
 // Has the enemy-API probe run in this world? It fires itself once the peer is up, so its
 // answer is in the mock's log without anyone pressing a key.
 global.coopEnemyProbed = false;
